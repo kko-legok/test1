@@ -36,12 +36,1322 @@
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
         </svg>
-        <p class="text-lg font-semibold text-slate-600">Memuat Aplikasi...</p>
+        <p class="text-lg font-semibold text-slate-600">Memuat Aplikasi & Menghubungkan ke Server...</p>
     </div>
 </div>
 
-<script src="github-storage.js"></script>
-<script src="app.js"></script>
+<script>
+// ---------- STATE GLOBAL & INISIALISASI APLIKASI ----------
+let userId = null;
+let currentUser = null; // Menyimpan data pengguna yang login {username, role, school}
+let editingId = null; // ID soal yang sedang diedit
+let editingAccountUsername = null; // Username akun yang sedang diedit
+let quizTimer = null; // Timer untuk kuis
+let lastDeletedQuestion = null; // Untuk fitur "Undo Delete" soal
+let tempLogoBase64 = null; // Menyimpan data logo sementara sebelum disimpan
+
+// Variabel status untuk mengontrol alur loading
+let isDataReady = false; 
+
+// Variabel untuk menyimpan data dari GitHub
+let configData = {}; // Menyimpan soal, durasi, dan branding
+let allAnswers = []; // Menyimpan semua jawaban peserta
+let allAccounts = {}; // Menyimpan semua akun pengguna
+
+// Akun admin default sebagai fallback jika database kosong
+const DEFAULT_ADMIN_ACCOUNT = { username: "admin", password: "admin123", role: "admin", school: "Administrator Lokal" };
+
+// ---------- SISTEM PENYIMPANAN GITHUB ----------
+class GitHubStorage {
+    constructor() {
+        this.owner = 'YOUR_GITHUB_USERNAME'; // Ganti dengan username GitHub Anda
+        this.repo = 'YOUR_REPO_NAME'; // Ganti dengan nama repository Anda
+        this.token = 'YOUR_GITHUB_TOKEN'; // Ganti dengan token GitHub Anda
+        this.baseUrl = `https://api.github.com/repos/${this.owner}/${this.repo}/contents`;
+        this.branch = 'main';
+        
+        // Data lokal sebagai cache
+        this.localData = {
+            config: null,
+            accounts: {},
+            answers: []
+        };
+        
+        this.isInitialized = false;
+    }
+
+    // Helper untuk request GitHub API
+    async githubRequest(url, options = {}) {
+        const headers = {
+            'Authorization': `token ${this.token}`,
+            'Accept': 'application/vnd.github.v3+json',
+            ...options.headers
+        };
+
+        try {
+            const response = await fetch(url, { ...options, headers });
+            
+            if (response.status === 404) {
+                return null; // File tidak ditemukan
+            }
+            
+            if (!response.ok) {
+                throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('GitHub request failed:', error);
+            throw error;
+        }
+    }
+
+    // Membaca file dari GitHub
+    async readFile(filename) {
+        try {
+            const url = `${this.baseUrl}/data/${filename}?ref=${this.branch}`;
+            const fileData = await this.githubRequest(url);
+            
+            if (!fileData) {
+                return null; // File tidak ada
+            }
+            
+            // Decode content dari base64
+            const content = atob(fileData.content.replace(/\n/g, ''));
+            return JSON.parse(content);
+        } catch (error) {
+            console.error(`Error reading ${filename}:`, error);
+            return null;
+        }
+    }
+
+    // Menyimpan file ke GitHub
+    async saveFile(filename, data, commitMessage = 'Update data') {
+        try {
+            // Cek apakah file sudah ada untuk mendapatkan SHA
+            const existingFile = await this.readFile(filename);
+            let sha = null;
+            
+            if (existingFile) {
+                const checkUrl = `${this.baseUrl}/data/${filename}?ref=${this.branch}`;
+                const fileInfo = await this.githubRequest(checkUrl);
+                sha = fileInfo?.sha;
+            }
+            
+            // Encode data ke base64
+            const content = btoa(JSON.stringify(data, null, 2));
+            
+            const url = `${this.baseUrl}/data/${filename}`;
+            const body = {
+                message: commitMessage,
+                content: content,
+                branch: this.branch
+            };
+            
+            if (sha) {
+                body.sha = sha;
+            }
+            
+            const result = await this.githubRequest(url, {
+                method: 'PUT',
+                body: JSON.stringify(body)
+            });
+            
+            console.log(`File ${filename} saved successfully`);
+            return true;
+        } catch (error) {
+            console.error(`Error saving ${filename}:`, error);
+            throw error;
+        }
+    }
+
+    // Inisialisasi dan load semua data
+    async initialize() {
+        try {
+            console.log('Initializing GitHub storage...');
+            
+            // Load config
+            this.localData.config = await this.readFile('config.json') || {
+                questions: [],
+                durations: { kepala: 10, bendahara: 10, dapodik: 10 },
+                branding: { logoData: null, text: "Penyelenggara Kuis" }
+            };
+            
+            // Load accounts
+            this.localData.accounts = await this.readFile('accounts.json') || { 
+                admin: DEFAULT_ADMIN_ACCOUNT
+            };
+            
+            // Load answers
+            this.localAnswers = await this.readFile('answers.json') || [];
+            
+            this.isInitialized = true;
+            console.log('GitHub storage initialized successfully');
+            
+            return {
+                config: this.localData.config,
+                accounts: this.localData.accounts,
+                answers: this.localAnswers
+            };
+            
+        } catch (error) {
+            console.error('Failed to initialize GitHub storage:', error);
+            // Fallback ke data lokal
+            const fallbackData = {
+                config: {
+                    questions: [],
+                    durations: { kepala: 10, bendahara: 10, dapodik: 10 },
+                    branding: { logoData: null, text: "Penyelenggara Kuis" }
+                },
+                accounts: { 
+                    admin: DEFAULT_ADMIN_ACCOUNT
+                },
+                answers: []
+            };
+            this.localData.config = fallbackData.config;
+            this.localData.accounts = fallbackData.accounts;
+            this.localAnswers = fallbackData.answers;
+            this.isInitialized = true;
+            
+            return fallbackData;
+        }
+    }
+
+    // ---------- OPERASI DATA ----------
+    
+    // Config operations
+    async getConfig() {
+        return this.localData.config;
+    }
+
+    async saveConfig(newConfig) {
+        this.localData.config = newConfig;
+        return await this.saveFile('config.json', newConfig, 'Update quiz configuration');
+    }
+
+    // Account operations
+    async getAccounts() {
+        return this.localData.accounts;
+    }
+
+    async saveAccount(accountData) {
+        this.localData.accounts[accountData.username] = accountData;
+        return await this.saveFile('accounts.json', this.localData.accounts, `Update account: ${accountData.username}`);
+    }
+
+    async deleteAccount(username) {
+        delete this.localData.accounts[username];
+        return await this.saveFile('accounts.json', this.localData.accounts, `Delete account: ${username}`);
+    }
+
+    // Answer operations
+    async getAnswers() {
+        return this.localAnswers;
+    }
+
+    async submitAnswer(answerData) {
+        answerData.id = `ans_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        this.localAnswers.push(answerData);
+        return await this.saveFile('answers.json', this.localAnswers, `New answer from: ${answerData.username}`);
+    }
+
+    async submitAnswersBatch(answerDataArray) {
+        const batch = [...this.localAnswers];
+        answerDataArray.forEach(answerData => {
+            answerData.id = `ans_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            batch.push(answerData);
+        });
+        this.localAnswers = batch;
+        return await this.saveFile('answers.json', this.localAnswers, `Batch answers from: ${currentUser.username}`);
+    }
+
+    // Backup operations
+    async createBackup() {
+        const backupData = {
+            config: this.localData.config,
+            accounts: this.localData.accounts,
+            answers: this.localAnswers,
+            timestamp: new Date().toISOString(),
+            version: '1.0'
+        };
+        
+        const timestamp = new Date().toISOString().split('T')[0];
+        return await this.saveFile(`backup_${timestamp}.json`, backupData, `Backup created: ${timestamp}`);
+    }
+
+    async restoreBackup(backupData) {
+        if (backupData.config) this.localData.config = backupData.config;
+        if (backupData.accounts) this.localData.accounts = backupData.accounts;
+        if (backupData.answers) this.localAnswers = backupData.answers;
+        
+        // Save all data
+        await this.saveFile('config.json', this.localData.config, 'Restore backup: config');
+        await this.saveFile('accounts.json', this.localData.accounts, 'Restore backup: accounts');
+        await this.saveFile('answers.json', this.localAnswers, 'Restore backup: answers');
+        
+        return true;
+    }
+}
+
+// Buat instance global
+const githubStorage = new GitHubStorage();
+
+// ---------- INISIALISASI APLIKASI ----------
+async function initializeApp() {
+    try {
+        const data = await githubStorage.initialize();
+        configData = data.config;
+        allAccounts = data.accounts;
+        allAnswers = data.answers;
+        
+        if (!allAccounts.admin) {
+            allAccounts.admin = DEFAULT_ADMIN_ACCOUNT;
+        }
+        
+        isDataReady = true;
+        renderApp();
+        
+    } catch (error) {
+        console.error("Kesalahan Inisialisasi Aplikasi:", error);
+        document.getElementById("loadingOverlay").innerHTML = `
+            <div class="text-center">
+                <p class="text-red-600 font-bold text-lg mb-4">Gagal terhubung ke GitHub.</p>
+                <p class="text-slate-600 mb-4">Periksa konfigurasi GitHub Storage dan refresh halaman.</p>
+                <button onclick="location.reload()" class="px-6 py-2 bg-sky-600 text-white rounded-lg">Coba Lagi</button>
+            </div>
+        `;
+    }
+}
+
+// ---------- OPERASI DATA ----------
+async function saveConfig(newData) {
+    try {
+        await githubStorage.saveConfig(newData);
+        configData = newData;
+        return true;
+    } catch (e) {
+        console.error("Error saving config:", e);
+        showMessage(`Gagal menyimpan konfigurasi. (Error: ${e.message})`);
+        return false;
+    }
+}
+
+async function submitAnswerToGitHub(answerData) {
+    try {
+        await githubStorage.submitAnswer(answerData);
+        allAnswers.push(answerData);
+        return true;
+    } catch (e) {
+        console.error("Error submitting answer:", e);
+        showMessage(`Gagal mengirim jawaban. Silakan coba lagi. (Error: ${e.message})`);
+        return false;
+    }
+}
+
+async function submitAnswersBatchToGitHub(answerDataArray) {
+    try {
+        await githubStorage.submitAnswersBatch(answerDataArray);
+        allAnswers.push(...answerDataArray);
+        return true;
+    } catch (e) {
+        console.error("Error submitting answers batch:", e);
+        showMessage(`Gagal mengirim jawaban. Silakan coba lagi. (Error: ${e.message})`);
+        return false;
+    }
+}
+
+async function saveAccountToGitHub(accountData) {
+    try {
+        await githubStorage.saveAccount(accountData);
+        allAccounts[accountData.username] = accountData;
+        return true;
+    } catch (e) {
+        console.error("Error saving account:", e);
+        showMessage(`Gagal menyimpan akun ${accountData.username}. (Error: ${e.message})`);
+        return false;
+    }
+}
+
+async function deleteAccountFromGitHub(username) {
+    try {
+        await githubStorage.deleteAccount(username);
+        delete allAccounts[username];
+        return true;
+    } catch (e) {
+        console.error("Error deleting account:", e);
+        showMessage(`Gagal menghapus akun ${username}. (Error: ${e.message})`);
+        return false;
+    }
+}
+
+// ------------------- RENDERER UTAMA APLIKASI -------------------
+
+function renderApp() {
+    const appContainer = document.getElementById("app");
+    const loadingOverlay = document.getElementById("loadingOverlay");
+
+    if (!isDataReady) {
+        if(loadingOverlay) loadingOverlay.style.display = 'flex';
+        return;
+    }
+    
+    if (loadingOverlay) loadingOverlay.style.display = 'none';
+
+    // Router sederhana berdasarkan status login
+    if (!currentUser) {
+        renderLogin();
+    } else if (currentUser.role === "admin") {
+        renderAdminMenu();
+    } else {
+        renderRoleSelect();
+    }
+}
+
+// ---------- MODAL & NOTIFIKASI KUSTOM ----------
+function showMessage(msg, callback = () => {}) {
+    const container = document.getElementById("modal-container");
+    const message = document.getElementById("modal-message");
+    const buttons = document.getElementById("modal-buttons");
+    
+    message.textContent = msg;
+    buttons.innerHTML = `<button class="px-6 py-2 bg-sky-600 text-white font-semibold rounded-lg shadow-md hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-opacity-75">OK</button>`;
+    buttons.firstElementChild.onclick = () => { hideModal(); callback(); };
+    
+    container.classList.remove("opacity-0", "pointer-events-none");
+}
+
+function showConfirm(msg, callback) {
+    const container = document.getElementById("modal-container");
+    const message = document.getElementById("modal-message");
+    const buttons = document.getElementById("modal-buttons");
+    
+    message.textContent = msg;
+    buttons.innerHTML = `
+        <button id="confirm-no" class="px-6 py-2 bg-slate-200 text-slate-800 font-semibold rounded-lg hover:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-400">Tidak</button>
+        <button id="confirm-yes" class="px-6 py-2 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500">Ya</button>
+    `;
+    
+    document.getElementById('confirm-yes').onclick = () => { hideModal(); callback(true); };
+    document.getElementById('confirm-no').onclick = () => { hideModal(); callback(false); };
+    
+    container.classList.remove("opacity-0", "pointer-events-none");
+}
+
+function hideModal() {
+    const container = document.getElementById("modal-container");
+    container.classList.add("opacity-0", "pointer-events-none");
+}
+
+// ---------- KOMPONEN UI & UTILITAS ----------
+
+function getBrandingHtml(size = 'large') {
+    const branding = configData.branding || {};
+    const logoSource = branding.logoData || `https://placehold.co/200x80/e2e8f0/475569?text=Logo+Anda`; 
+    const text = branding.text || "Penyelenggara Kuis";
+    
+    if (size === 'large') {
+        return `
+            <div class="text-center mb-8">
+                <img src="${logoSource}" alt="Logo Penyelenggara" class="mx-auto h-16 sm:h-20 object-contain mb-4"/>
+                <h1 class="text-2xl sm:text-3xl font-bold text-slate-700">${text}</h1>
+            </div>
+        `;
+    }
+    return `
+        <div class="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+            <img src="${logoSource}" alt="Logo Penyelenggara" class="h-10 sm:h-12 object-contain"/>
+            <span class="font-semibold text-slate-600">${text}</span>
+        </div>
+    `;
+}
+
+// Template untuk input field
+const inputField = (id, label, type = "text", value = "", extraAttrs = "") => `
+    <div>
+        <label for="${id}" class="block mb-1.5 text-sm font-medium text-slate-600">${label}</label>
+        <input type="${type}" id="${id}" value="${value}" ${extraAttrs}
+               class="w-full px-4 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition">
+    </div>
+`;
+
+// Template untuk tombol
+const button = (text, onclick, type = "primary", extraClasses = "") => {
+    const colors = {
+        primary: "bg-sky-600 hover:bg-sky-700 text-white",
+        secondary: "bg-slate-600 hover:bg-slate-700 text-white",
+        danger: "bg-red-600 hover:bg-red-700 text-white",
+        light: "bg-slate-200 hover:bg-slate-300 text-slate-800"
+    };
+    return `<button onclick="${onclick}" class="w-full text-center px-5 py-2.5 font-semibold rounded-lg shadow-sm transition ${colors[type]} ${extraClasses}">${text}</button>`;
+};
+
+// ---------- HALAMAN-HALAMAN APLIKASI ----------
+
+function renderLogin() {
+    document.getElementById("app").innerHTML = `
+        <div class="w-full max-w-sm">
+            ${getBrandingHtml('large')}
+            <div class="space-y-4">
+                ${inputField("loginUser", "Username", "text", "", 'placeholder="cth: kelompok1 atau admin"')}
+                ${inputField("loginPass", "Password", "password", "", 'placeholder="Masukkan password Anda"')}
+                ${button("Login", "doLogin()")}
+            </div>
+            <p class="text-xs text-center text-slate-400 mt-6">GitHub Storage System</p>
+        </div>
+    `;
+}
+
+function doLogin() {
+    const u = document.getElementById("loginUser").value.trim();
+    const p = document.getElementById("loginPass").value.trim();
+    
+    if (allAccounts[u] && allAccounts[u].password === p) {
+        currentUser = { username: u, role: allAccounts[u].role, school: allAccounts[u].school };
+        renderApp();
+    } else {
+        showMessage("Login gagal! Username atau Password salah.");
+    }
+}
+
+function logout() {
+    currentUser = null;
+    renderApp();
+}
+
+function renderAdminMenu() {
+    document.getElementById("app").innerHTML = `
+        <div class="w-full">
+            ${getBrandingHtml('small')}
+            <div class="text-center mb-6">
+                <h2 class="text-2xl font-bold">Menu Admin</h2>
+                <p class="text-slate-500">Login sebagai: <strong>${currentUser.username}</strong></p>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                ${button("Input & Kelola Soal", "renderQuestionInput()", "primary")}
+                ${button("Pengaturan Durasi", "renderDurationSettings()", "primary")}
+                ${button("Manajemen Akun", "renderAccountManagement()", "primary")}
+                ${button("Rekap Nilai Peserta", "renderScores()", "primary")}
+                ${button("Pengaturan Branding", "renderBrandingSettings()", "secondary")}
+                ${button("Logout", "logout()", "danger")}
+            </div>
+        </div>
+    `;
+}
+
+// --- Manajemen Akun ---
+function renderAccountManagement(filterRole = null) {
+    const isEditing = !!editingAccountUsername;
+    const currentAccount = allAccounts[editingAccountUsername] || {};
+    let tableRows = '';
+
+    Object.keys(allAccounts)
+        .sort((a,b) => a.localeCompare(b))
+        .filter(u => !filterRole || allAccounts[u].role === filterRole)
+        .forEach(username => {
+            const acc = allAccounts[username];
+            const isMainAdmin = acc.username === 'admin';
+            const actionDisabled = isMainAdmin ? 'disabled' : '';
+            const titleText = isMainAdmin ? 'title="Akun admin utama tidak dapat diubah."' : '';
+
+            tableRows += `
+                <tr class="bg-white border-b hover:bg-slate-50">
+                    <td class="px-6 py-3 font-medium text-slate-900">${username}${isMainAdmin ? ' <span class="text-xs bg-sky-100 text-sky-800 px-2 py-0.5 rounded-full">Utama</span>' : ''}</td>
+                    <td class="px-6 py-3 text-slate-600">${acc.school}</td>
+                    <td class="px-6 py-3"><span class="text-xs font-medium px-2 py-1 rounded-full ${acc.role === 'admin' ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'}">${acc.role}</span></td>
+                    <td class="px-6 py-3 flex gap-2">
+                        <button onclick="editAccount('${acc.username}')" ${actionDisabled} ${titleText} class="font-medium text-sky-600 hover:underline disabled:text-slate-300 disabled:no-underline">Edit</button>
+                        <button onclick="deleteAccount('${acc.username}')" ${actionDisabled} ${titleText} class="font-medium text-red-600 hover:underline disabled:text-slate-300 disabled:no-underline">Hapus</button>
+                    </td>
+                </tr>`;
+        });
+    
+    document.getElementById("app").innerHTML = `
+        <div class="w-full">
+            ${getBrandingHtml('small')}
+            <h2 class="text-2xl font-bold mb-4">Manajemen Akun</h2>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <!-- Form Tambah/Edit -->
+                <div class="md:col-span-1 bg-slate-50 p-6 rounded-xl border">
+                    <h3 class="font-bold text-lg mb-4">${isEditing ? 'Edit Akun: ' + editingAccountUsername : 'Tambah Akun Baru'}</h3>
+                    <div class="space-y-4">
+                        ${inputField("accUser", "Username", "text", currentAccount.username || '', isEditing ? 'disabled class="bg-slate-200 cursor-not-allowed"' : '')}
+                        ${inputField("accPass", "Password", "text", currentAccount.password || '')}
+                        ${inputField("accSchool", "Nama Sekolah/Grup", "text", currentAccount.school || '')}
+                        <div>
+                            <label for="accRole" class="block mb-1.5 text-sm font-medium text-slate-600">Peran</label>
+                            <select id="accRole" class="w-full px-4 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-sky-500">
+                                <option value="peserta" ${currentAccount.role === 'peserta' ? 'selected' : ''}>Peserta</option>
+                                <option value="admin" ${currentAccount.role === 'admin' ? 'selected' : ''}>Admin</option>
+                            </select>
+                        </div>
+                        <div class="flex gap-2 pt-2">
+                            ${button(isEditing ? 'Update Akun' : 'Simpan Akun', "saveAccount()")}
+                            ${button("Batal", "cancelAccountEdit()", "light")}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Daftar Akun -->
+                <div class="md:col-span-2">
+                    <div class="flex justify-between items-center mb-4">
+                         <h3 class="font-bold text-lg">Daftar Akun (${Object.keys(allAccounts).length})</h3>
+                         <select onchange="renderAccountManagement(this.value)" class="px-3 py-1.5 text-sm border border-slate-300 rounded-lg">
+                            <option value="" ${!filterRole ? 'selected' : ''}>Semua Peran</option>
+                            <option value="admin" ${filterRole === 'admin' ? 'selected' : ''}>Admin</option>
+                            <option value="peserta" ${filterRole === 'peserta' ? 'selected' : ''}>Peserta</option>
+                         </select>
+                    </div>
+                    <div class="relative overflow-x-auto rounded-lg border">
+                        <table class="w-full text-sm text-left">
+                            <thead class="text-xs text-slate-700 uppercase bg-slate-100">
+                                <tr>
+                                    <th scope="col" class="px-6 py-3">Username</th>
+                                    <th scope="col" class="px-6 py-3">Sekolah/Grup</th>
+                                    <th scope="col" class="px-6 py-3">Peran</th>
+                                    <th scope="col" class="px-6 py-3">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody>${tableRows}</tbody>
+                        </table>
+                    </div>
+                     <div class="flex gap-4 mt-6">
+                        ${button("Download Akun (XLSX)", "downloadAccountsXLSX()", "secondary")}
+                        ${button("Kembali ke Menu", "renderAdminMenu()", "light")}
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+// ---- Fungsi-fungsi pembantu untuk manajemen akun ----
+function cancelAccountEdit() { editingAccountUsername = null; renderAccountManagement(); }
+function editAccount(username) { editingAccountUsername = username; renderAccountManagement(); }
+function deleteAccount(username) { 
+    showConfirm(`Anda yakin ingin menghapus akun ${username}? Tindakan ini tidak dapat dibatalkan.`, async (confirmed) => {
+        if (confirmed) {
+            if (await deleteAccountFromGitHub(username)) {
+                showMessage(`Akun ${username} berhasil dihapus dari GitHub.`);
+            }
+        }
+    });
+}
+async function saveAccount() {
+    const username = (editingAccountUsername || document.getElementById("accUser").value).trim();
+    const password = document.getElementById("accPass").value.trim();
+    const school = document.getElementById("accSchool").value.trim();
+    const role = document.getElementById("accRole").value;
+
+    if (!username || !password || !school) return showMessage("Username, Password, dan Sekolah tidak boleh kosong.");
+    if (!editingAccountUsername && allAccounts[username]) return showMessage(`Username "${username}" sudah digunakan.`);
+
+    if (await saveAccountToGitHub({ username, password, school, role })) {
+        showMessage(`Akun ${username} berhasil disimpan.`);
+        editingAccountUsername = null;
+        renderAccountManagement();
+    }
+}
+function downloadAccountsXLSX(){
+    const data = [["Username", "Password", "Peran", "Nama Sekolah/Grup"]];
+    Object.values(allAccounts).forEach(acc => {
+        data.push([acc.username, acc.password, acc.role, acc.school]);
+    });
+    
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Data Akun");
+    XLSX.writeFile(wb, "data_akun_kuis.xlsx");
+}
+
+// ---------- KELOLA SOAL ----------
+function renderQuestionInput(filterRole = null) {
+    const isEditing = editingId !== null;
+    const questions = configData.questions || [];
+    const currentQuestion = questions.find(q => q.id === editingId) || {};
+    let tableRows = '';
+
+    const filteredQuestions = questions.filter(q => !filterRole || q.role === filterRole);
+
+    filteredQuestions.forEach((q, index) => {
+        tableRows += `
+            <tr class="bg-white border-b hover:bg-slate-50">
+                <td class="px-6 py-3 font-medium text-slate-900">${index + 1}</td>
+                <td class="px-6 py-3 text-slate-600">${q.text.substring(0, 50)}...</td>
+                <td class="px-6 py-3"><span class="text-xs font-medium px-2 py-1 rounded-full bg-blue-100 text-blue-800">${q.role}</span></td>
+                <td class="px-6 py-3 text-center font-bold text-green-600">${q.answer}</td>
+                <td class="px-6 py-3 flex gap-2">
+                    <button onclick="editQuestion('${q.id}')" class="font-medium text-sky-600 hover:underline">Edit</button>
+                    <button onclick="deleteQuestion('${q.id}')" class="font-medium text-red-600 hover:underline">Hapus</button>
+                </td>
+            </tr>`;
+    });
+    
+    const undoButtonHtml = lastDeletedQuestion 
+        ? `<div class="mb-4">${button("Urungkan Hapus Soal Terakhir", "undoDeleteQuestion()", "secondary")}</div>`
+        : '';
+
+    document.getElementById("app").innerHTML = `
+        <div class="w-full">
+            ${getBrandingHtml('small')}
+            <h2 class="text-2xl font-bold mb-4">Input & Kelola Soal</h2>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <!-- Form Tambah/Edit Soal -->
+                <div class="md:col-span-1 bg-slate-50 p-6 rounded-xl border">
+                    <h3 class="font-bold text-lg mb-4">${isEditing ? 'Edit Soal' : 'Tambah Soal Baru'}</h3>
+                    <div class="space-y-4">
+                        <div>
+                            <label for="qText" class="block mb-1.5 text-sm font-medium text-slate-600">Pertanyaan</label>
+                            <textarea id="qText" rows="3" class="w-full px-4 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-sky-500">${currentQuestion.text || ''}</textarea>
+                        </div>
+                        ${inputField("qOptA", "Pilihan A", "text", currentQuestion.options ? currentQuestion.options[0] : '')}
+                        ${inputField("qOptB", "Pilihan B", "text", currentQuestion.options ? currentQuestion.options[1] : '')}
+                        ${inputField("qOptC", "Pilihan C", "text", currentQuestion.options ? currentQuestion.options[2] : '')}
+                        ${inputField("qOptD", "Pilihan D", "text", currentQuestion.options ? currentQuestion.options[3] : '')}
+                        <div>
+                            <label for="qAnswer" class="block mb-1.5 text-sm font-medium text-slate-600">Jawaban Benar</label>
+                            <select id="qAnswer" class="w-full px-4 py-2 bg-white border border-slate-300 rounded-lg">
+                                ${['A', 'B', 'C', 'D'].map(opt => `<option value="${opt}" ${currentQuestion.answer === opt ? 'selected' : ''}>${opt}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="qRole" class="block mb-1.5 text-sm font-medium text-slate-600">Untuk Peran</label>
+                            <select id="qRole" class="w-full px-4 py-2 bg-white border border-slate-300 rounded-lg">
+                                ${['kepala', 'bendahara', 'dapodik'].map(role => `<option value="${role}" ${currentQuestion.role === role ? 'selected' : ''}>${role.charAt(0).toUpperCase() + role.slice(1)}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="flex gap-2 pt-2">
+                            ${button(isEditing ? 'Update Soal' : 'Simpan Soal', "saveQuestion()")}
+                            ${isEditing ? button("Batal", "cancelQuestionEdit()", "light") : ''}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Daftar Soal -->
+                <div class="md:col-span-2">
+                    <div class="flex justify-between items-center mb-4">
+                         <h3 class="font-bold text-lg">Daftar Soal (${questions.length})</h3>
+                         <select id="questionRoleFilter" onchange="renderQuestionInput(this.value)" class="px-3 py-1.5 text-sm border border-slate-300 rounded-lg">
+                            <option value="">Semua Peran</option>
+                            ${['kepala', 'bendahara', 'dapodik'].map(role => `<option value="${role}" ${filterRole === role ? 'selected' : ''}>${role.charAt(0).toUpperCase() + role.slice(1)}</option>`).join('')}
+                         </select>
+                    </div>
+                    ${undoButtonHtml}
+                    <div class="relative overflow-x-auto rounded-lg border max-h-[400px]">
+                        <table class="w-full text-sm text-left">
+                            <thead class="text-xs text-slate-700 uppercase bg-slate-100 sticky top-0">
+                                <tr>
+                                    <th scope="col" class="px-6 py-3">No</th>
+                                    <th scope="col" class="px-6 py-3">Pertanyaan</th>
+                                    <th scope="col" class="px-6 py-3">Peran</th>
+                                    <th scope="col" class="px-6 py-3 text-center">Jawaban</th>
+                                    <th scope="col" class="px-6 py-3">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody>${tableRows.length > 0 ? tableRows : `<tr><td colspan="5" class="text-center p-8 text-slate-500">Belum ada soal untuk peran ini.</td></tr>`}</tbody>
+                        </table>
+                    </div>
+                    <div class="flex gap-4 mt-6">
+                         ${button("Kembali ke Menu", "renderAdminMenu()", "light")}
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function editQuestion(id) { editingId = id; renderQuestionInput(); }
+function cancelQuestionEdit() { editingId = null; renderQuestionInput(); }
+
+async function saveQuestion() {
+    const text = document.getElementById('qText').value.trim();
+    const options = [
+        document.getElementById('qOptA').value.trim(),
+        document.getElementById('qOptB').value.trim(),
+        document.getElementById('qOptC').value.trim(),
+        document.getElementById('qOptD').value.trim()
+    ];
+    const answer = document.getElementById('qAnswer').value;
+    const role = document.getElementById('qRole').value;
+
+    if (!text || options.some(opt => !opt)) {
+        return showMessage("Pertanyaan dan semua pilihan jawaban harus diisi.");
+    }
+
+    const newConfig = { ...configData };
+    if (!newConfig.questions) newConfig.questions = [];
+
+    if (editingId !== null) { // Update
+        const qIndex = newConfig.questions.findIndex(q => q.id === editingId);
+        if (qIndex > -1) {
+            newConfig.questions[qIndex] = { ...newConfig.questions[qIndex], text, options, answer, role };
+        }
+    } else { // Tambah baru
+        newConfig.questions.push({ id: `q_${Date.now()}`, text, options, answer, role });
+    }
+
+    if (await saveConfig(newConfig)) {
+        showMessage(`Soal berhasil ${editingId !== null ? 'diperbarui' : 'disimpan'}.`);
+        editingId = null;
+    }
+}
+
+async function deleteQuestion(id) {
+    showConfirm("Anda yakin ingin menghapus soal ini?", async (confirmed) => {
+        if (confirmed) {
+            const newConfig = { ...configData };
+            const qIndex = newConfig.questions.findIndex(q => q.id === id);
+            if (qIndex > -1) {
+                lastDeletedQuestion = newConfig.questions[qIndex]; // Simpan untuk undo
+                newConfig.questions.splice(qIndex, 1);
+                if (await saveConfig(newConfig)) {
+                    showMessage("Soal berhasil dihapus.");
+                }
+            }
+        }
+    });
+}
+
+async function undoDeleteQuestion() {
+    if (lastDeletedQuestion) {
+        const newConfig = { ...configData };
+        newConfig.questions.push(lastDeletedQuestion);
+        if (await saveConfig(newConfig)) {
+            showMessage("Penghapusan soal berhasil dibatalkan.");
+            lastDeletedQuestion = null;
+        }
+    }
+}
+
+// ---------- PENGATURAN DURASI ----------
+function renderDurationSettings() {
+    const durations = configData.durations || { kepala: 10, bendahara: 10, dapodik: 10 };
+    document.getElementById('app').innerHTML = `
+        <div class="w-full max-w-lg mx-auto">
+            ${getBrandingHtml('small')}
+            <h2 class="text-2xl font-bold mb-6 text-center">Pengaturan Durasi Ujian</h2>
+            <div class="bg-slate-50 p-6 rounded-xl border space-y-4">
+                <p class="text-sm text-slate-600 text-center">Atur durasi pengerjaan kuis untuk setiap peran dalam satuan menit.</p>
+                ${inputField("durKepala", "Kepala Sekolah (menit)", "number", durations.kepala)}
+                ${inputField("durBendahara", "Bendahara (menit)", "number", durations.bendahara)}
+                ${inputField("durDapodik", "Operator Dapodik (menit)", "number", durations.dapodik)}
+            </div>
+            <div class="flex gap-4 mt-6">
+                ${button("Simpan Durasi", "saveDurations()")}
+                ${button("Kembali ke Menu", "renderAdminMenu()", "light")}
+            </div>
+        </div>`;
+}
+
+async function saveDurations() {
+    const kepala = parseInt(document.getElementById('durKepala').value) || 10;
+    const bendahara = parseInt(document.getElementById('durBendahara').value) || 10;
+    const dapodik = parseInt(document.getElementById('durDapodik').value) || 10;
+
+    const newConfig = { ...configData, durations: { kepala, bendahara, dapodik } };
+    
+    if (await saveConfig(newConfig)) {
+        showMessage("Pengaturan durasi berhasil disimpan!");
+    }
+}
+
+// ---------- REKAP NILAI ----------
+function calculateAllScores() {
+    const scores = {};
+    const questions = configData.questions || [];
+
+    allAnswers.forEach(ans => {
+        if (!scores[ans.username]) {
+            scores[ans.username] = {
+                username: ans.username,
+                school: ans.school,
+                role: ans.role,
+                correct: 0,
+                total: 0,
+                timestamp: ans.timestamp
+            };
+        }
+        
+        const question = questions.find(q => q.role === ans.role);
+        if (question) {
+            scores[ans.username].total = question.length;
+        }
+        
+        const correctAnswer = questions.find(q => q.id === ans.questionId)?.answer;
+        if (correctAnswer && ans.answer === correctAnswer) {
+            scores[ans.username].correct++;
+        }
+    });
+    
+    // Hitung total soal per peran
+    const questionsPerRole = questions.reduce((acc, q) => {
+        if (!acc[q.role]) acc[q.role] = 0;
+        acc[q.role]++;
+        return acc;
+    }, {});
+
+    // Finalisasi skor
+    return Object.values(scores).map(s => {
+        const totalQuestions = questionsPerRole[s.role] || 0;
+        s.total = totalQuestions;
+        s.score = totalQuestions > 0 ? Math.round((s.correct / totalQuestions) * 100) : 0;
+        return s;
+    }).sort((a, b) => b.score - a.score);
+}
+
+function renderScores(filterSchool = null, filterRole = null) {
+    const allScoresData = calculateAllScores();
+    let tableRows = '';
+
+    const schools = [...new Set(allScoresData.map(s => s.school))].sort();
+
+    const filteredScores = allScoresData.filter(s => 
+        (!filterSchool || s.school === filterSchool) && 
+        (!filterRole || s.role === filterRole)
+    );
+
+    filteredScores.forEach((s, index) => {
+        const scoreColor = s.score >= 75 ? 'text-green-600' : s.score >= 50 ? 'text-amber-600' : 'text-red-600';
+        tableRows += `
+             <tr class="bg-white border-b hover:bg-slate-50">
+                <td class="px-6 py-3 font-medium text-slate-900">${index + 1}</td>
+                <td class="px-6 py-3">${s.username}</td>
+                <td class="px-6 py-3 text-slate-600">${s.school}</td>
+                <td class="px-6 py-3"><span class="text-xs font-medium px-2 py-1 rounded-full bg-blue-100 text-blue-800">${s.role}</span></td>
+                <td class="px-6 py-3 font-bold text-lg ${scoreColor}">${s.score}</td>
+                <td class="px-6 py-3 text-sm">${s.correct} / ${s.total}</td>
+                <td class="px-6 py-3 text-xs text-slate-500">${new Date(s.timestamp).toLocaleString('id-ID')}</td>
+            </tr>
+        `;
+    });
+
+    document.getElementById('app').innerHTML = `
+        <div class="w-full">
+            ${getBrandingHtml('small')}
+            <h2 class="text-2xl font-bold mb-4 text-center">Rekap Nilai Peserta</h2>
+            
+            <!-- Filters -->
+            <div class="flex flex-col sm:flex-row gap-4 mb-4 p-4 bg-slate-50 rounded-xl border">
+                <div class="flex-1">
+                    <label class="text-sm font-medium text-slate-600">Filter Sekolah</label>
+                    <select onchange="renderScores(this.value, '${filterRole || ''}')" class="w-full mt-1 px-3 py-1.5 text-sm border border-slate-300 rounded-lg">
+                        <option value="">Semua Sekolah</option>
+                        ${schools.map(sch => `<option value="${sch}" ${filterSchool === sch ? 'selected' : ''}>${sch}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="flex-1">
+                    <label class="text-sm font-medium text-slate-600">Filter Peran</label>
+                    <select onchange="renderScores('${filterSchool || ''}', this.value)" class="w-full mt-1 px-3 py-1.5 text-sm border border-slate-300 rounded-lg">
+                        <option value="">Semua Peran</option>
+                        ${['kepala', 'bendahara', 'dapodik'].map(role => `<option value="${role}" ${filterRole === role ? 'selected' : ''}>${role.charAt(0).toUpperCase() + role.slice(1)}</option>`).join('')}
+                    </select>
+                </div>
+            </div>
+
+            <!-- Tabel Nilai -->
+            <div class="relative overflow-x-auto rounded-lg border max-h-[500px]">
+                <table class="w-full text-sm text-left">
+                    <thead class="text-xs text-slate-700 uppercase bg-slate-100 sticky top-0">
+                        <tr>
+                            <th scope="col" class="px-6 py-3">Rank</th>
+                            <th scope="col" class="px-6 py-3">Username</th>
+                            <th scope="col" class="px-6 py-3">Sekolah</th>
+                            <th scope="col" class="px-6 py-3">Peran</th>
+                            <th scope="col" class="px-6 py-3">Nilai Akhir</th>
+                            <th scope="col" class="px-6 py-3">Benar/Total</th>
+                            <th scope="col" class="px-6 py-3">Waktu Selesai</th>
+                        </tr>
+                    </thead>
+                    <tbody>${tableRows.length > 0 ? tableRows : `<tr><td colspan="7" class="text-center p-8 text-slate-500">Tidak ada data nilai yang sesuai dengan filter.</td></tr>`}</tbody>
+                </table>
+            </div>
+
+            <div class="flex gap-4 mt-6">
+                ${button("Download Nilai (XLSX)", "downloadScoresXLSX()", "secondary")}
+                ${button("Kembali ke Menu", "renderAdminMenu()", "light")}
+                ${button("Backup & Restore Data", "renderBackupRestore()", "secondary")}
+            </div>
+        </div>
+    `;
+}
+
+// Fungsi baru untuk backup/restore
+function renderBackupRestore() {
+    document.getElementById("app").innerHTML = `
+        <div class="w-full max-w-2xl mx-auto">
+            ${getBrandingHtml('small')}
+            <h2 class="text-2xl font-bold mb-6">Backup & Restore Data</h2>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Backup Section -->
+                <div class="bg-green-50 p-6 rounded-xl border border-green-200">
+                    <h3 class="font-bold text-lg mb-4 text-green-800">Backup Data</h3>
+                    <p class="text-sm text-green-600 mb-4">Download semua data (soal, akun, jawaban) sebagai file JSON.</p>
+                    ${button("Download Backup", "downloadBackup()", "primary")}
+                </div>
+
+                <!-- Restore Section -->
+                <div class="bg-blue-50 p-6 rounded-xl border border-blue-200">
+                    <h3 class="font-bold text-lg mb-4 text-blue-800">Restore Data</h3>
+                    <p class="text-sm text-blue-600 mb-4">Upload file JSON untuk mengembalikan data.</p>
+                    <input type="file" id="restoreFile" accept=".json" class="w-full mb-4 p-2 border rounded">
+                    ${button("Upload & Restore", "restoreBackup()", "primary")}
+                </div>
+            </div>
+
+            <div class="mt-6">
+                ${button("Kembali ke Menu", "renderAdminMenu()", "light")}
+            </div>
+        </div>
+    `;
+}
+
+async function downloadBackup() {
+    try {
+        await githubStorage.createBackup();
+        showMessage("Backup berhasil dibuat di GitHub!");
+    } catch (error) {
+        showMessage("Gagal membuat backup: " + error.message);
+    }
+}
+
+async function restoreBackup() {
+    const fileInput = document.getElementById('restoreFile');
+    const file = fileInput.files[0];
+    
+    if (!file) {
+        return showMessage("Pilih file backup terlebih dahulu.");
+    }
+
+    try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        
+        showConfirm("Restore akan menimpa data yang ada. Lanjutkan?", async (confirmed) => {
+            if (confirmed) {
+                await githubStorage.restoreBackup(data);
+                showMessage("Restore berhasil! Halaman akan reload.", () => location.reload());
+            }
+        });
+    } catch (error) {
+        showMessage("File tidak valid atau rusak.");
+    }
+}
+
+function downloadScoresXLSX() {
+    const scores = calculateAllScores();
+    const data = [["Peringkat", "Username", "Sekolah", "Peran", "Nilai", "Jawaban Benar", "Total Soal", "Waktu Selesai"]];
+    scores.forEach((s, index) => {
+        data.push([
+            index + 1,
+            s.username,
+            s.school,
+            s.role,
+            s.score,
+            s.correct,
+            s.total,
+            new Date(s.timestamp).toLocaleString('id-ID')
+        ]);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Rekap Nilai");
+    XLSX.writeFile(wb, "rekap_nilai_kuis.xlsx");
+}
+
+function renderBrandingSettings() {
+    const b = configData.branding || {};
+    const currentLogoData = b.logoData || "https://placehold.co/200x80/e2e8f0/475569?text=Logo+Preview";
+    
+    document.getElementById("app").innerHTML = `
+        <div class="w-full max-w-lg">
+            ${getBrandingHtml('small')}
+            <h2 class="text-2xl font-bold mb-6">Pengaturan Branding</h2>
+            <div class="space-y-6">
+                ${inputField("brandingText", "Teks Penyelenggara", "text", b.text || '')}
+                <div>
+                    <label class="block mb-1.5 text-sm font-medium text-slate-600">Unggah Logo (JPG/PNG)</label>
+                    <input type="file" id="logoUpload" accept=".jpg, .jpeg, .png" onchange="handleLogoUpload(event)"
+                           class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-sky-50 file:text-sky-700 hover:file:bg-sky-100"/>
+                </div>
+                <div class="text-center p-4 border-2 border-dashed rounded-xl">
+                    <strong class="text-sm text-slate-500">Preview Logo Saat Ini</strong>
+                    <img id="logoPreview" src="${currentLogoData}" class="max-h-24 mx-auto mt-2 object-contain">
+                </div>
+                <div class="flex gap-4 pt-2">
+                    ${button("Simpan Pengaturan", "saveBrandingSettings()")}
+                    ${button("Kembali", "renderAdminMenu()", "light")}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+async function saveBrandingSettings() {
+    const b = configData.branding || {};
+    const newText = document.getElementById("brandingText").value.trim();
+    const logoToSave = tempLogoBase64 || b.logoData;
+    
+    if (!newText) return showMessage("Teks penyelenggara tidak boleh kosong.");
+    
+    const newConfig = { ...configData, branding: { text: newText, logoData: logoToSave } };
+    if (await saveConfig(newConfig)) {
+        showMessage("Pengaturan Branding berhasil disimpan!", renderAdminMenu);
+        tempLogoBase64 = null;
+    }
+}
+
+function handleLogoUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    if (!['image/jpeg', 'image/png'].includes(file.type)) return showMessage("Hanya file JPG atau PNG yang diizinkan.");
+    
+    const reader = new FileReader();
+    reader.onload = e => {
+        tempLogoBase64 = e.target.result;
+        document.getElementById('logoPreview').src = tempLogoBase64;
+        showMessage("Logo berhasil di-preview. Klik 'Simpan' untuk menerapkan.");
+    };
+    reader.readAsDataURL(file);
+}
+
+// ---------- HALAMAN PESERTA ----------
+
+// 1. Halaman Pemilihan Peran
+function renderRoleSelect() {
+    // Cek apakah peserta sudah pernah mengerjakan kuis untuk peran tertentu
+    const hasTakenKepala = allAnswers.some(a => a.username === currentUser.username && a.role === 'kepala');
+    const hasTakenBendahara = allAnswers.some(a => a.username === currentUser.username && a.role === 'bendahara');
+    const hasTakenDapodik = allAnswers.some(a => a.username === currentUser.username && a.role === 'dapodik');
+
+    const roleButton = (role, title, taken) => {
+        const disabled = taken ? 'disabled' : '';
+        const classes = taken 
+            ? 'bg-slate-300 cursor-not-allowed' 
+            : 'bg-sky-600 hover:bg-sky-700';
+        const text = taken ? 'Sudah Dikerjakan' : `Mulai sebagai ${title}`;
+
+        return `
+            <button onclick="startQuiz('${role}')" ${disabled}
+                    class="w-full text-white font-bold py-4 px-4 rounded-lg transition shadow-lg ${classes}">
+                <span class="text-xl">${title}</span><br>
+                <span class="text-sm font-normal">${text}</span>
+            </button>
+        `;
+    };
+
+    document.getElementById('app').innerHTML = `
+        <div class="w-full max-w-lg mx-auto">
+            ${getBrandingHtml('small')}
+            <div class="text-center">
+                <h2 class="text-2xl font-bold">Selamat Datang, ${currentUser.username}!</h2>
+                <p class="text-slate-600 mb-8">Anda login dari <strong>${currentUser.school}</strong>. Silakan pilih peran ujian Anda.</p>
+                <div class="space-y-4">
+                    ${roleButton('kepala', 'Kepala Sekolah', hasTakenKepala)}
+                    ${roleButton('bendahara', 'Bendahara', hasTakenBendahara)}
+                    ${roleButton('dapodik', 'Operator Dapodik', hasTakenDapodik)}
+                </div>
+                <div class="mt-8">
+                    ${button("Logout", "logout()", "danger")}
+                </div>
+            </div>
+        </div>`;
+}
+
+// 2. Memulai Kuis
+function startQuiz(role) {
+    const questionsForRole = (configData.questions || []).filter(q => q.role === role);
+    if (questionsForRole.length === 0) {
+        return showMessage(`Maaf, belum ada soal yang tersedia untuk peran ${role}.`);
+    }
+
+    const durationInMinutes = (configData.durations || {})[role] || 10;
+    
+    // Inisialisasi state kuis
+    window.currentQuizState = {
+        role: role,
+        questions: questionsForRole,
+        userAnswers: {}, // { questionId: "A" }
+        currentIndex: 0,
+        timeLeft: durationInMinutes * 60,
+    };
+
+    // Mulai timer
+    if (quizTimer) clearInterval(quizTimer);
+    quizTimer = setInterval(updateTimer, 1000);
+
+    renderQuiz();
+}
+
+// 3. Tampilan Halaman Kuis
+function renderQuiz() {
+    const state = window.currentQuizState;
+    if (!state) return renderRoleSelect(); // Kembali jika state tidak ada
+
+    const question = state.questions[state.currentIndex];
+    const progress = Math.round(((state.currentIndex + 1) / state.questions.length) * 100);
+
+    document.getElementById('app').innerHTML = `
+        <div class="w-full">
+            <!-- Header Kuis -->
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-bold">Ujian Peran: <span class="text-sky-600">${state.role.toUpperCase()}</span></h2>
+                <div id="timer" class="text-2xl font-bold text-red-600 bg-red-100 px-4 py-1 rounded-lg"></div>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="w-full bg-slate-200 rounded-full h-2.5 mb-6">
+                <div class="bg-sky-600 h-2.5 rounded-full" style="width: ${progress}%"></div>
+            </div>
+
+            <!-- Soal -->
+            <div class="bg-slate-50 p-6 rounded-xl border mb-6">
+                <p class="text-lg font-semibold mb-1">Soal ${state.currentIndex + 1} dari ${state.questions.length}</p>
+                <p class="text-xl">${question.text}</p>
+            </div>
+            
+            <!-- Pilihan Jawaban -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                ${question.options.map((opt, index) => {
+                    const choice = String.fromCharCode(65 + index); // A, B, C, D
+                    const isSelected = state.userAnswers[question.id] === choice;
+                    const selectedClasses = isSelected ? 'ring-2 ring-sky-500 bg-sky-100 border-sky-500' : 'border-slate-300 hover:bg-slate-100 hover:border-slate-400';
+                    return `
+                        <div onclick="selectAnswer('${choice}')" 
+                             class="flex items-center gap-4 p-4 bg-white border rounded-lg cursor-pointer transition ${selectedClasses}">
+                            <div class="flex-shrink-0 w-8 h-8 flex items-center justify-center font-bold text-sky-700 bg-sky-100 rounded-full">${choice}</div>
+                            <p class="flex-1">${opt}</p>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+
+            <!-- Navigasi -->
+            <div class="flex justify-between mt-8">
+                <button onclick="navigateQuiz(-1)" class="px-6 py-2 bg-slate-200 text-slate-800 font-semibold rounded-lg" ${state.currentIndex === 0 ? 'disabled' : ''}>Sebelumnya</button>
+                ${state.currentIndex === state.questions.length - 1
+                    ? `<button onclick="confirmSubmit()" class="px-6 py-2 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700">Selesai Ujian</button>`
+                    : `<button onclick="navigateQuiz(1)" class="px-6 py-2 bg-sky-600 text-white font-semibold rounded-lg shadow-md hover:bg-sky-700">Selanjutnya</button>`
+                }
+            </div>
+        </div>
+    `;
+    updateTimer(); // Panggil sekali untuk tampilan awal
+}
+
+function updateTimer() {
+    const timerEl = document.getElementById('timer');
+    if (!timerEl || !window.currentQuizState) {
+        if(quizTimer) clearInterval(quizTimer);
+        return;
+    }
+    
+    let state = window.currentQuizState;
+    state.timeLeft--;
+    
+    if (state.timeLeft < 0) {
+        clearInterval(quizTimer);
+        showMessage("Waktu habis! Jawaban Anda akan dikumpulkan secara otomatis.", submitQuiz);
+        return;
+    }
+    
+    const minutes = Math.floor(state.timeLeft / 60);
+    const seconds = state.timeLeft % 60;
+    timerEl.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function selectAnswer(choice) {
+    const state = window.currentQuizState;
+    const questionId = state.questions[state.currentIndex].id;
+    state.userAnswers[questionId] = choice;
+    renderQuiz(); // Render ulang untuk menunjukkan pilihan
+}
+
+function navigateQuiz(direction) {
+    const state = window.currentQuizState;
+    const newIndex = state.currentIndex + direction;
+    if (newIndex >= 0 && newIndex < state.questions.length) {
+        state.currentIndex = newIndex;
+        renderQuiz();
+    }
+}
+
+function confirmSubmit() {
+    showConfirm("Apakah Anda yakin ingin menyelesaikan ujian?", (confirmed) => {
+        if (confirmed) {
+            submitQuiz();
+        }
+    });
+}
+
+// 4. Mengirim Jawaban
+async function submitQuiz() {
+    if (quizTimer) clearInterval(quizTimer);
+    const state = window.currentQuizState;
+    if (!state) return;
+
+    const answerDataArray = [];
+    const timestamp = Date.now();
+
+    // Loop melalui semua soal, bahkan yang tidak dijawab
+    state.questions.forEach(q => {
+        const answerData = {
+            username: currentUser.username,
+            school: currentUser.school,
+            role: state.role,
+            questionId: q.id,
+            answer: state.userAnswers[q.id] || null, // Kirim null jika tidak dijawab
+            timestamp: timestamp
+        };
+        answerDataArray.push(answerData);
+    });
+
+    try {
+        await submitAnswersBatchToGitHub(answerDataArray);
+        renderQuizComplete();
+    } catch (e) {
+        console.error("Gagal mengirim jawaban:", e);
+        showMessage("Terjadi kesalahan saat mengirim jawaban Anda. Silakan coba lagi.", renderRoleSelect);
+    }
+}
+
+// 5. Halaman Selesai Kuis
+function renderQuizComplete() {
+    const state = window.currentQuizState;
+    let correct = 0;
+    state.questions.forEach(q => {
+        if (state.userAnswers[q.id] === q.answer) {
+            correct++;
+        }
+    });
+    const score = Math.round((correct / state.questions.length) * 100);
+
+    document.getElementById('app').innerHTML = `
+        <div class="w-full text-center">
+            ${getBrandingHtml('large')}
+            <h2 class="text-3xl font-bold text-green-600 mb-4">Ujian Selesai!</h2>
+            <p class="text-lg text-slate-700 mb-2">Terima kasih, <strong>${currentUser.username}</strong>, telah menyelesaikan ujian.</p>
+            <div class="my-8 p-6 bg-slate-50 rounded-xl inline-block">
+                <p class="text-slate-600">Nilai Anda:</p>
+                <p class="text-6xl font-bold text-sky-600">${score}</p>
+                <p class="text-slate-600 mt-2">Anda menjawab benar <strong>${correct}</strong> dari <strong>${state.questions.length}</strong> soal.</p>
+            </div>
+            <div class="max-w-xs mx-auto space-y-3">
+                ${button("Kembali ke Pilihan Peran", "renderRoleSelect()", "secondary")}
+                ${button("Logout", "logout()", "danger")}
+            </div>
+        </div>
+    `;
+    window.currentQuizState = null; // Hapus state kuis
+}
+
+// ---------- ENTRY POINT APLIKASI ----------
+window.onload = function() {
+    initializeApp();
+};
+</script>
 
 </body>
 </html>
