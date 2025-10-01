@@ -1,23 +1,36 @@
-# Kuis Online Profesional dengan Firestore
+# Kuis Online dengan GitHub Storage
 
-Aplikasi kuis online berbasis web dengan Firebase Firestore sebagai backend.
+## Setup Awal
 
-## Fitur Utama
-- ✅ Manajemen soal dan akun
-- ✅ Kuis dengan timer
-- ✅ Export data ke Excel
-- ✅ Branding kustom
-- ✅ Autentikasi multi-role
+1. **Buat Repository GitHub**
+   - Buat repository baru di GitHub
+   - Buat folder `data` di root repository
 
-## Setup
-1. Clone repository ini
-2. Buka `index.html` di browser
-3. Login dengan akun default: admin/admin123
+2. **Dapatkan GitHub Token**
+   - Buka GitHub Settings → Developer settings → Personal access tokens
+   - Generate new token dengan permissions: `repo` dan `workflow`
+   - Simpan token dengan aman
 
-## Konfigurasi Firebase
-Edit variabel `YOUR_FIREBASE_CONFIG_JSON` di file `index.html` dengan konfigurasi Firebase project Anda.
+3. **Konfigurasi GitHub Storage**
+   - Edit file `github-storage.js`
+   - Ganti nilai berikut:
+     - `YOUR_GITHUB_USERNAME` → username GitHub Anda
+     - `YOUR_REPO_NAME` → nama repository Anda  
+     - `YOUR_GITHUB_TOKEN` → token yang sudah dibuat
+
+4. **Upload ke GitHub Pages**
+   - Upload semua file ke repository
+   - Aktifkan GitHub Pages di repository settings
+   - Pilih branch `main` sebagai source
 
 ## Struktur Data
-- Soal disimpan di: `artifacts/{appId}/public/data/quiz_config`
-- Jawaban di: `artifacts/{appId}/public/data/quiz_answers`
-- Akun di: `artifacts/{appId}/public/data/user_accounts`
+
+Aplikasi akan menyimpan 3 file utama di folder `data`:
+- `config.json` - Soal, durasi, dan pengaturan
+- `accounts.json` - Data akun pengguna
+- `answers.json` - Jawaban peserta
+
+## Keamanan
+
+- GitHub token disimpan di client-side (tidak aman untuk production)
+- Untuk production, gunakan backend proxy atau GitHub Apps
