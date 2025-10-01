@@ -1,9 +1,9 @@
 // ---------- SISTEM PENYIMPANAN GITHUB ----------
 class GitHubStorage {
     constructor() {
-        this.owner = 'YOUR_GITHUB_USERNAME'; // Ganti dengan username GitHub Anda
-        this.repo = 'YOUR_REPO_NAME'; // Ganti dengan nama repository Anda
-        this.token = 'YOUR_GITHUB_TOKEN'; // Ganti dengan token GitHub Anda
+        this.owner = 'kko-legok'; // Ganti dengan username GitHub Anda
+        this.repo = 'quis'; // Ganti dengan nama repository Anda
+        this.token = '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'; // Ganti dengan token GitHub Anda
         this.baseUrl = `https://api.github.com/repos/${this.owner}/${this.repo}/contents`;
         this.branch = 'main';
         
