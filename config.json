@@ -1,0 +1,138 @@
+{
+  "app_config": {
+    "firebase_config": {
+      "apiKey": "AIzaSyDTN4rwjokUJ4sG6Rm4r9iLJYytopW1xac",
+      "authDomain": "sdn-caringin-2-project.firebaseapp.com",
+      "projectId": "sdn-caringin-2-project",
+      "storageBucket": "sdn-caringin-2-project.appspot.com",
+      "messagingSenderId": "709185608911",
+      "appId": "1:709185608911:web:817874ce9249a03f3debba"
+    },
+    "app_id": "default-app-id",
+    "default_admin_account": {
+      "username": "admin",
+      "password": "admin123",
+      "role": "admin",
+      "school": "Administrator Lokal"
+    },
+    "account_sheet_url": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0X6G-zDglQQNA5kgNTxUqykUVQCfAY0_xOW5SNLkoD6XyQ6TwAkDkEebh2vnhwg/pub?output=csv",
+    "firestore_paths": {
+      "public_config": "artifacts/default-app-id/public/data/quiz_config",
+      "public_answers": "artifacts/default-app-id/public/data/quiz_answers",
+      "public_accounts": "artifacts/default-app-id/public/data/user_accounts"
+    }
+  },
+  "quiz_config": {
+    "questions": [
+      {
+        "id": "string",
+        "text": "string",
+        "options": ["string", "string", "string", "string"],
+        "answer": "A|B|C|D",
+        "role": "kepala|bendahara|dapodik"
+      }
+    ],
+    "durations": {
+      "kepala": 10,
+      "bendahara": 10,
+      "dapodik": 10
+    },
+    "branding": {
+      "logoData": "string_base64_or_url",
+      "text": "Penyelenggara Kuis"
+    }
+  },
+  "user_accounts": {
+    "username1": {
+      "username": "string",
+      "password": "string",
+      "role": "admin|peserta",
+      "school": "string"
+    },
+    "username2": {
+      "username": "string",
+      "password": "string",
+      "role": "admin|peserta",
+      "school": "string"
+    }
+  },
+  "quiz_answers": [
+    {
+      "id": "string",
+      "username": "string",
+      "school": "string",
+      "role": "kepala|bendahara|dapodik",
+      "questionId": "string",
+      "answer": "A|B|C|D|null",
+      "timestamp": 1234567890
+    }
+  ],
+  "app_state": {
+    "current_user": {
+      "username": "string",
+      "role": "string",
+      "school": "string"
+    },
+    "editing_id": "string|null",
+    "editing_account_username": "string|null",
+    "last_deleted_question": {
+      "id": "string",
+      "text": "string",
+      "options": ["string", "string", "string", "string"],
+      "answer": "A|B|C|D",
+      "role": "kepala|bendahara|dapodik"
+    },
+    "temp_logo_base64": "string|null",
+    "quiz_timer": {
+      "role": "string",
+      "time_left": 600,
+      "current_index": 0,
+      "user_answers": {
+        "question_id1": "A",
+        "question_id2": "B"
+      }
+    }
+  },
+  "ui_templates": {
+    "input_field": {
+      "template": "<div><label for=\"{{id}}\" class=\"block mb-1.5 text-sm font-medium text-slate-600\">{{label}}</label><input type=\"{{type}}\" id=\"{{id}}\" value=\"{{value}}\" {{extraAttrs}} class=\"w-full px-4 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition\"></div>"
+    },
+    "button": {
+      "primary": "bg-sky-600 hover:bg-sky-700 text-white",
+      "secondary": "bg-slate-600 hover:bg-slate-700 text-white",
+      "danger": "bg-red-600 hover:bg-red-700 text-white",
+      "light": "bg-slate-200 hover:bg-slate-300 text-slate-800"
+    },
+    "branding": {
+      "large": "<div class=\"text-center mb-8\"><img src=\"{{logoSource}}\" alt=\"Logo Penyelenggara\" class=\"mx-auto h-16 sm:h-20 object-contain mb-4\"/><h1 class=\"text-2xl sm:text-3xl font-bold text-slate-700\">{{text}}</h1></div>",
+      "small": "<div class=\"flex items-center gap-4 mb-6 pb-4 border-b border-slate-200\"><img src=\"{{logoSource}}\" alt=\"Logo Penyelenggara\" class=\"h-10 sm:h-12 object-contain\"/><span class=\"font-semibold text-slate-600\">{{text}}</span></div>"
+    }
+  },
+  "page_templates": {
+    "login": {
+      "html": "<div class=\"w-full max-w-sm\">{{branding_large}}<div class=\"space-y-4\">{{username_input}}{{password_input}}{{login_button}}</div><p class=\"text-xs text-center text-slate-400 mt-6\">Firebase UID: {{user_id}}</p></div>"
+    },
+    "admin_menu": {
+      "html": "<div class=\"w-full\">{{branding_small}}<div class=\"text-center mb-6\"><h2 class=\"text-2xl font-bold\">Menu Admin</h2><p class=\"text-slate-500\">Login sebagai: <strong>{{username}}</strong></p></div><div class=\"grid grid-cols-1 sm:grid-cols-2 gap-4\">{{manage_questions_button}}{{duration_settings_button}}{{account_management_button}}{{scores_button}}{{branding_settings_button}}{{logout_button}}</div></div>"
+    },
+    "quiz": {
+      "html": "<div class=\"w-full\"><div class=\"flex justify-between items-center mb-4\"><h2 class=\"text-xl font-bold\">Ujian Peran: <span class=\"text-sky-600\">{{role}}</span></h2><div id=\"timer\" class=\"text-2xl font-bold text-red-600 bg-red-100 px-4 py-1 rounded-lg\">{{time}}</div></div><div class=\"w-full bg-slate-200 rounded-full h-2.5 mb-6\"><div class=\"bg-sky-600 h-2.5 rounded-full\" style=\"width: {{progress}}%\"></div></div><div class=\"bg-slate-50 p-6 rounded-xl border mb-6\"><p class=\"text-lg font-semibold mb-1\">Soal {{current_index}} dari {{total_questions}}</p><p class=\"text-xl\">{{question_text}}</p></div><div class=\"grid grid-cols-1 md:grid-cols-2 gap-4\">{{options}}</div><div class=\"flex justify-between mt-8\">{{prev_button}}{{next_or_submit_button}}</div></div>"
+    }
+  },
+  "export_data": {
+    "accounts_xlsx": {
+      "headers": ["Username", "Password", "Peran", "Nama Sekolah/Grup"],
+      "data_format": "array_of_arrays"
+    },
+    "scores_xlsx": {
+      "headers": ["Peringkat", "Username", "Sekolah", "Peran", "Nilai", "Jawaban Benar", "Total Soal", "Waktu Selesai"],
+      "data_format": "array_of_arrays"
+    }
+  },
+  "metadata": {
+    "version": "1.0",
+    "last_updated": "2024-01-01T00:00:00Z",
+    "created_by": "Kuis Online Professional - Firestore",
+    "data_schema_version": "1.0"
+  }
+}
