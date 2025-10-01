@@ -919,9 +919,73 @@ function renderScores(filterSchool = null, filterRole = null) {
             <div class="flex gap-4 mt-6">
                 ${button("Download Nilai (XLSX)", "downloadScoresXLSX()", "secondary")}
                 ${button("Kembali ke Menu", "renderAdminMenu()", "light")}
+                ${button("Backup & Restore Data", "renderBackupRestore()", "secondary")}
             </div>
         </div>
     `;
+}
+
+// Fungsi baru untuk backup/restore
+function renderBackupRestore() {
+    document.getElementById("app").innerHTML = `
+        <div class="w-full max-w-2xl mx-auto">
+            ${getBrandingHtml('small')}
+            <h2 class="text-2xl font-bold mb-6">Backup & Restore Data</h2>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Backup Section -->
+                <div class="bg-green-50 p-6 rounded-xl border border-green-200">
+                    <h3 class="font-bold text-lg mb-4 text-green-800">Backup Data</h3>
+                    <p class="text-sm text-green-600 mb-4">Download semua data (soal, akun, jawaban) sebagai file JSON.</p>
+                    ${button("Download Backup", "downloadBackup()", "primary")}
+                </div>
+
+                <!-- Restore Section -->
+                <div class="bg-blue-50 p-6 rounded-xl border border-blue-200">
+                    <h3 class="font-bold text-lg mb-4 text-blue-800">Restore Data</h3>
+                    <p class="text-sm text-blue-600 mb-4">Upload file JSON untuk mengembalikan data.</p>
+                    <input type="file" id="restoreFile" accept=".json" class="w-full mb-4 p-2 border rounded">
+                    ${button("Upload & Restore", "restoreBackup()", "primary")}
+                </div>
+            </div>
+
+            <div class="mt-6">
+                ${button("Kembali ke Menu", "renderAdminMenu()", "light")}
+            </div>
+        </div>
+    `;
+}
+
+async function downloadBackup() {
+    try {
+        await window.backupUtility.createBackup(db);
+        showMessage("Backup berhasil didownload!");
+    } catch (error) {
+        showMessage("Gagal membuat backup: " + error.message);
+    }
+}
+
+async function restoreBackup() {
+    const fileInput = document.getElementById('restoreFile');
+    const file = fileInput.files[0];
+    
+    if (!file) {
+        return showMessage("Pilih file backup terlebih dahulu.");
+    }
+
+    try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        
+        showConfirm("Restore akan menimpa data yang ada. Lanjutkan?", async (confirmed) => {
+            if (confirmed) {
+                await window.backupUtility.restoreBackup(db, data);
+                showMessage("Restore berhasil! Halaman akan reload.", () => location.reload());
+            }
+        });
+    } catch (error) {
+        showMessage("File tidak valid atau rusak.");
+    }
 }
 
 function downloadScoresXLSX() {
