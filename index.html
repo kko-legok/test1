@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kuis Online Kelompok</title>
+    <!-- Library untuk membaca/menulis file Excel -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        /* Gaya Dasar */
+        body { font-family: Arial, sans-serif; background:#f3f3f3; margin:0; padding:20px;}
+        .card { background:#fff; padding:20px; border-radius:12px; box-shadow:0 4px 10px rgba(0,0,0,.1); max-width:700px; margin:auto;}
+        h2 { text-align:center; color: #333; margin-bottom: 20px;}
+        .info { text-align: center; margin-bottom: 15px; padding: 10px; background: #e9ecef; border-radius: 6px; font-weight: bold;}
+        label { display:block; margin-top:15px; font-weight: bold; color: #555;}
+        input, select, textarea { width:100%; padding:10px; margin-top:5px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box;}
+        /* Styling tambahan untuk input file */
+        input[type="file"] { border: 1px solid #ccc; padding: 10px; background: #f9f9f9; cursor: pointer; }
+        input[type="file"]:hover { background: #eee; }
+
+        button { margin-top:15px; padding:10px 16px; border:none; border-radius:6px; cursor:pointer; background:#007BFF; color:#fff; transition: background 0.3s ease;}
+        button:hover { background:#0056b3;}
+        .button-group { display: flex; justify-content: space-between; margin-top: 20px; }
+        .button-group button { margin-top: 0; flex-grow: 1; margin-right: 10px; }
+        .button-group button:last-child { margin-right: 0; }
+        table { width:100%; border-collapse:collapse; margin-top:20px; font-size: 0.9em;}
+        table, th, td { border:1px solid #ddd;}
+        th { background: #f8f8f8; color: #333; padding: 10px;}
+        td { padding:8px; text-align:left;}
+        .danger { background:#dc3545; color:#fff;}
+        .danger:hover { background: #c82333;}
+        .timer { font-size:20px; font-weight:bold; color:#dc3545; text-align:center; margin:10px 0; padding: 10px; background: #fff3f3; border-radius: 8px;}
+        .section-separator { margin: 30px 0; border: none; border-top: 2px solid #ccc; }
+        
+        /* Gaya untuk Modal (Pengganti Alert/Confirm) */
+        #modal-container {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.6); display: none; justify-content: center; align-items: center; z-index: 1000;
+        }
+        .modal-content {
+            background: #fff; padding: 25px; border-radius: 12px; max-width: 400px; width: 90%; text-align: center;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        .modal-buttons button { margin: 5px; }
+        .undo-button { background: #ff9900; color: #fff; }
+        .undo-button:hover { background: #e68a00; }
+        
+        /* Gaya untuk Filter Skor Gabungan */
+        .score-filter { display: flex; gap: 10px; align-items: center; margin-bottom: 10px;}
+        .score-filter select { flex-grow: 1; width: auto;}
+
+        /* Gaya Branding */
+        .branding-large { text-align: center; margin-bottom: 25px; }
+        .branding-large img { max-width: 150px; height: auto; border-radius: 4px; }
+        .branding-large .organizer-text { color: #333; font-size: 1.2em; font-weight: bold; margin-top: 10px; }
+        
+        .branding-small { display: flex; align-items: center; justify-content: flex-start; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .branding-small img { max-width: 80px; height: auto; margin-right: 15px; border-radius: 4px; }
+        .branding-small .organizer-text { color: #555; font-size: 0.9em; font-weight: bold; }
+
+    </style>
+</head>
+<body>
+
+<!-- Kontainer Modal Kustom -->
+<div id="modal-container">
+    <div class="modal-content">
+        <p id="modal-message"></p>
+        <div id="modal-buttons" class="modal-buttons">
+            <!-- Buttons will be injected by JavaScript -->
+        </div>
+    </div>
+</div>
+
+<div id="app" class="card"></div>
+
+<script>
+/* ---------- Data Awal & State Global ---------- */
+if (!localStorage.getItem("accounts")) {
+    const accounts = { admin: { password: "admin123", role: "admin", school:"Administrator" } }; 
+    for (let i=1; i<=30; i++) {
+        accounts["kelompok"+i] = { password:"123", role:"peserta", school:`Sekolah Default Kelompok ${i}` };
+    }
+    localStorage.setItem("accounts", JSON.stringify(accounts));
+}
+if (!localStorage.getItem("questions")) localStorage.setItem("questions", JSON.stringify([]));
+if (!localStorage.getItem("answers")) localStorage.setItem("answers", JSON.stringify([]));
+if (!localStorage.getItem("durations")) {
+    localStorage.setItem("durations", JSON.stringify({kepala:10, bendahara:10, dapodik:10}));
+}
+// Inisialisasi Data Branding
+if (!localStorage.getItem("branding")) {
+    localStorage.setItem("branding", JSON.stringify({
+        logoData: null, // Sekarang menyimpan Base64 data, bukan URL
+        text: "Penyelenggara Kuis Dinas Pendidikan"
+    }));
+}
+
+let currentUser = null;
+let editingId = null;
+let quizTimer = null;
+let lastDeletedQuestion = null; 
+let tempLogoBase64 = null; // State sementara untuk logo yang baru diupload
+
+/* ---------- Modal Kustom (Pengganti Alert/Confirm) ---------- */
+function showMessage(msg, callback = () => {}) {
+    const container = document.getElementById("modal-container");
+    const message = document.getElementById("modal-message");
+    const buttons = document.getElementById("modal-buttons");
+
+    message.textContent = msg;
+    buttons.innerHTML = ''; 
+
+    const okButton = document.createElement('button');
+    okButton.textContent = 'OK';
+    okButton.addEventListener('click', () => {
+        hideModal();
+        callback();
+    });
+
+    buttons.appendChild(okButton);
+    container.style.display = 'flex';
+}
+
+function showConfirm(msg, callback) {
+    const container = document.getElementById("modal-container");
+    const message = document.getElementById("modal-message");
+    const buttons = document.getElementById("modal-buttons");
+
+    message.textContent = msg;
+    buttons.innerHTML = ''; 
+
+    const yesButton = document.createElement('button');
+    yesButton.textContent = 'Ya';
+    yesButton.addEventListener('click', () => {
+        hideModal();
+        callback(true);
+    });
+
+    const noButton = document.createElement('button');
+    noButton.textContent = 'Tidak';
+    noButton.classList.add('danger');
+    noButton.addEventListener('click', () => {
+        hideModal();
+        callback(false);
+    });
+
+    buttons.appendChild(yesButton);
+    buttons.appendChild(noButton);
+    container.style.display = 'flex';
+}
+
+function hideModal() {
+    document.getElementById("modal-container").style.display = 'none';
+}
+
+
+/* ---------- Helper ---------- */
+function loadAccounts(){ return JSON.parse(localStorage.getItem("accounts"));}
+function saveAccounts(acc){ localStorage.setItem("accounts", JSON.stringify(acc)); }
+function loadQuestions(){ return JSON.parse(localStorage.getItem("questions"));}
+function saveQuestions(qs){ localStorage.setItem("questions", JSON.stringify(qs)); }
+function loadAnswers(){ return JSON.parse(localStorage.getItem("answers"));}
+function saveAnswers(ans){ localStorage.setItem("answers", JSON.stringify(ans)); }
+function loadDurations(){ return JSON.parse(localStorage.getItem("durations"));}
+function saveDurations(d){ localStorage.setItem("durations", JSON.stringify(d)); }
+function loadBranding(){ return JSON.parse(localStorage.getItem("branding"));}
+function saveBranding(b){ localStorage.setItem("branding", JSON.stringify(b)); }
+
+// Fungsi untuk menampilkan Logo dan Teks Penyelenggara
+function getBrandingHtml(size = 'large') {
+    const branding = loadBranding();
+    // Gunakan logoData (Base64) jika tersedia, jika tidak gunakan placeholder.
+    const logoSource = branding.logoData 
+        ? branding.logoData 
+        : "https://placehold.co/150x50/007BFF/ffffff?text=LOGO"; 
+    const text = branding.text || "Penyelenggara Kuis";
+    
+    // Sesuaikan styling berdasarkan ukuran (large: halaman login; small: halaman lainnya)
+    // Jika menggunakan Base64, tidak perlu onerror karena data sudah ada
+    const logoStyle = size === 'large' ? 'max-width: 150px; height: auto;' : 'max-width: 80px; height: auto; margin-right: 15px;';
+    const errorHandling = branding.logoData ? '' : `onerror="this.onerror=null; this.src='https://placehold.co/80x30/ccc/333?text=Logo';"`;
+
+    return `
+        <div class="branding-${size}">
+            <img src="${logoSource}" alt="Logo Penyelenggara" style="${logoStyle} border-radius: 4px;" ${errorHandling} />
+            <div class="organizer-text">
+                ${text}
+            </div>
+        </div>
+    `;
+}
+
+
+/* ---------- Login ---------- */
+function renderLogin(){
+    document.getElementById("app").innerHTML=`
+        ${getBrandingHtml('large')}
+        <h2>Login</h2>
+        <label>Username</label><input id="loginUser">
+        <label>Password</label><input type="password" id="loginPass">
+        <button onclick="doLogin()">Login</button>
+    `;
+}
+function doLogin(){
+    const u=document.getElementById("loginUser").value.trim();
+    const p=document.getElementById("loginPass").value.trim();
+    const acc=loadAccounts();
+    if(acc[u] && acc[u].password===p){
+        currentUser={username:u, role:acc[u].role, school:acc[u].school}; 
+        if(currentUser.role==="admin") renderAdminMenu(); else renderRoleSelect();
+    } else showMessage("Login gagal! Username atau Password salah.");
+}
+
+/* ---------- Admin Menu ---------- */
+function renderAdminMenu(){
+    document.getElementById("app").innerHTML=`
+        ${getBrandingHtml('small')}
+        <h2>Menu Admin</h2>
+        <button onclick="renderAccountMgmt()">Manajemen Akun</button>
+        <button onclick="renderQuestionInput()">Input Soal</button>
+        <button onclick="renderDurationSettings()">Pengaturan Durasi</button>
+        <button onclick="renderScores()">Rekap Nilai</button> 
+        <button onclick="renderBrandingSettings()">Pengaturan Branding</button>
+        <button class="danger" onclick="logout()">Logout</button>
+    `;
+}
+
+/* ---------- Pengaturan Branding (Diperbarui untuk File Upload) ---------- */
+
+// Fungsi untuk menangani upload file dan konversi ke Base64
+function handleLogoUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const validTypes = ['image/jpeg', 'image/png', 'image/jpg'];
+    if (!validTypes.includes(file.type)) {
+        showMessage("Hanya file JPG, JPEG, atau PNG yang diizinkan.");
+        event.target.value = ''; // Reset input file
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        // Simpan Base64 data di state sementara
+        tempLogoBase64 = e.target.result;
+        showMessage("Logo berhasil diunggah dan siap disimpan. Klik 'Simpan' untuk menerapkan.");
+        // Perbarui preview
+        document.getElementById('logoPreview').src = tempLogoBase64;
+    };
+    reader.onerror = function() {
+        showMessage("Gagal membaca file.");
+        tempLogoBase64 = null;
+    };
+    reader.readAsDataURL(file);
+}
+
+function renderBrandingSettings() {
+    const b = loadBranding();
+    // Gunakan state sementara atau data yang sudah tersimpan untuk preview
+    const currentLogoData = tempLogoBase64 || b.logoData || "https://placehold.co/150x50/ccc/333?text=Logo+Preview";
+    
+    document.getElementById("app").innerHTML = `
+        ${getBrandingHtml('small')}
+        <h2>Pengaturan Branding</h2>
+        
+        <label>Teks Penyelenggara</label>
+        <input id="brandingText" value="${b.text || ''}">
+        
+        <label>Unggah Logo (JPG/JPEG/PNG)</label>
+        <input type="file" id="logoUpload" accept=".jpg, .jpeg, .png" onchange="handleLogoUpload(event)">
+        
+        <div style="margin-top: 20px; text-align: center;">
+            <strong>Preview Logo:</strong>
+            <img id="logoPreview" src="${currentLogoData}" 
+                 style="max-width: 100%; max-height: 100px; margin-top: 10px; border: 1px solid #ddd; border-radius: 4px;"
+                 onerror="this.src='https://placehold.co/100x50/ccc/333?text=Logo+Preview';"
+            >
+        </div>
+        
+        <button onclick="saveBrandingSettings()">Simpan</button>
+        <button onclick="renderAdminMenu()">Kembali</button>
+    `;
+    // Reset state sementara setelah rendering
+    tempLogoBase64 = null;
+}
+
+function saveBrandingSettings() {
+    const b = loadBranding();
+    const newText = document.getElementById("brandingText").value.trim();
+    
+    // Gunakan logo yang baru diupload (jika ada di temp state) atau logo lama
+    const logoToSave = tempLogoBase64 || b.logoData;
+
+    if (!newText) {
+        showMessage("Teks penyelenggara tidak boleh kosong.");
+        return;
+    }
+
+    // Simpan data Base64 ke localStorage
+    saveBranding({ text: newText, logoData: logoToSave });
+    
+    showMessage("Pengaturan Branding berhasil disimpan!");
+    renderAdminMenu();
+}
+
+
+/* ---------- Manajemen Akun (Diperbarui untuk Akun Admin) ---------- */
+function renderAccountMgmt(){
+    const acc=loadAccounts();
+    let html=`
+        ${getBrandingHtml('small')}
+        <h2>Manajemen Akun</h2>
+        <h3>Import/Export Akun</h3>
+        <button onclick="downloadAccountTemplate()">Download Format Excel (.xlsx)</button>
+        <label>Upload File Excel (.xlsx) untuk Memperbarui Akun:</label>
+        <input type="file" id="accountUpload" accept=".xlsx" onchange="uploadAccounts(event)">
+        <hr class="section-separator">
+        <h3>Daftar Akun</h3>
+        <table>
+        <tr><th>Username</th><th>Password</th><th>Nama Sekolah</th><th>Role</th><th>Aksi</th></tr>`;
+    
+    // Tampilkan semua akun, termasuk admin
+    Object.keys(acc).forEach(u=>{
+        const account = acc[u];
+        const roleDisplay = account.role === 'admin' ? 'Admin' : 'Peserta';
+        const schoolDisplay = account.school || '-';
+
+        html+=`<tr>
+            <td>${u}</td>
+            <td>${account.password}</td>
+            <td>${schoolDisplay}</td>
+            <td>${roleDisplay}</td>
+            <td><button onclick="editAccount('${u}')">Edit</button></td>
+        </tr>`;
+    });
+    
+    html+=`</table><button onclick="renderAdminMenu()">Kembali</button>`;
+    document.getElementById("app").innerHTML=html;
+}
+
+// Fungsi untuk membuat dan mendownload template Excel (Diperbarui: Tambah Admin)
+function downloadAccountTemplate() {
+    const data = [
+        ["username", "password", "role", "school"],
+        ["admin", "admin123", "admin", "Administrator"], // Akun Admin
+        ["kelompok1", "123", "peserta", "SDN 1 Jakarta"],
+        ["kelompok2", "123", "peserta", "SMPN 2 Bandung"],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Akun Kelompok");
+    XLSX.writeFile(wb, "template_akun_kelompok.xlsx");
+}
+
+// Fungsi untuk membaca dan mengupdate akun dari Excel (Diperbarui: Terima Admin)
+function uploadAccounts(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, {type: 'array'});
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+            
+            const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+            
+            if (json.length <= 1) {
+                showMessage("File Excel kosong atau hanya berisi header.");
+                return;
+            }
+
+            const newAccounts = {};
+            const headers = json[0].map(h => String(h).toLowerCase().trim());
+            
+            if (!headers.includes("username") || !headers.includes("password") || !headers.includes("role") || !headers.includes("school")) {
+                showMessage("Header file Excel harus mengandung 'username', 'password', 'role', dan 'school'.");
+                return;
+            }
+
+            for (let i = 1; i < json.length; i++) {
+                const row = json[i];
+                const account = {};
+                // Menggunakan index header untuk memastikan urutan tidak masalah
+                headers.forEach((header, index) => {
+                    account[header] = String(row[index] || '').trim();
+                });
+
+                if (account.username && account.password) {
+                    const role = account.role.toLowerCase();
+                    if (role === 'peserta' || role === 'admin') {
+                         newAccounts[account.username] = {
+                            password: account.password,
+                            role: role,
+                            school: account.school || (role === 'admin' ? 'Administrator' : '-') // Set default school for admin
+                        };
+                    }
+                }
+            }
+
+            if (Object.keys(newAccounts).length > 0) {
+                saveAccounts(newAccounts);
+                showMessage(`Berhasil mengimpor ${Object.keys(newAccounts).length} akun (termasuk Admin jika ada).`);
+                renderAccountMgmt(); 
+            } else {
+                showMessage("Tidak ada akun valid yang ditemukan di file Excel.");
+            }
+        } catch (error) {
+            console.error(error);
+            showMessage("Gagal memproses file Excel. Pastikan formatnya benar.");
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+
+function editAccount(username){
+    const acc=loadAccounts();
+    const a=acc[username];
+    // Pastikan admin tidak bisa mengganti role sendiri
+    const isSelfAdmin = username === currentUser.username && a.role === 'admin';
+    const roleInput = isSelfAdmin 
+        ? `<label>Role</label><input value="${a.role}" disabled>`
+        : `<label>Role</label>
+           <select id="accRole">
+               <option value="peserta" ${a.role === 'peserta' ? 'selected' : ''}>Peserta</option>
+               <option value="admin" ${a.role === 'admin' ? 'selected' : ''}>Admin</option>
+           </select>`;
+
+    document.getElementById("app").innerHTML=`
+        ${getBrandingHtml('small')}
+        <h2>Edit Akun</h2>
+        <label>Username</label><input id="accUser" value="${username}">
+        <label>Password</label><input id="accPass" value="${a.password}">
+        <label>Nama Sekolah</label><input id="accSchool" value="${a.school||''}">
+        ${roleInput}
+        <button onclick="saveAccount('${username}')">Simpan</button>
+        <button onclick="renderAccountMgmt()">Batal</button>
+    `;
+}
+function saveAccount(oldUser){
+    const acc=loadAccounts();
+    const oldAccount = acc[oldUser];
+
+    const newUser=document.getElementById("accUser").value.trim();
+    const newPass=document.getElementById("accPass").value.trim();
+    const newSchool=document.getElementById("accSchool").value.trim();
+    
+    // Ambil role dari input atau pertahankan role lama jika input role disabled
+    const roleElement = document.getElementById("accRole");
+    const newRole = roleElement ? roleElement.value : oldAccount.role; 
+
+    // Verifikasi agar tidak ada akun admin tunggal yang dihapus/diubah role-nya
+    if (oldAccount.role === 'admin' && newRole !== 'admin' && Object.values(acc).filter(a => a.role === 'admin').length === 1) {
+        showMessage("Tidak dapat menghapus atau mengubah peran Admin terakhir.");
+        return;
+    }
+
+
+    acc[newUser]={...oldAccount, 
+        password:newPass, 
+        school:newSchool,
+        role: newRole
+    };
+    
+    if(newUser!==oldUser) delete acc[oldUser];
+    saveAccounts(acc);
+    renderAccountMgmt();
+}
+
+/* ---------- Input Soal (Tidak Berubah) ---------- */
+function renderQuestionInput(filterRole=null){
+    const qs=loadQuestions().filter(q=>!filterRole || q.role===filterRole);
+    
+    const undoButton = lastDeletedQuestion 
+        ? `<button class="undo-button" style="margin-bottom: 20px;" onclick="undoDeleteQuestion()">Undo Hapus Soal: ${lastDeletedQuestion.text.substring(0, 40)}...</button>` 
+        : '';
+
+    let form=`
+        ${getBrandingHtml('small')}
+        <h2>${editingId?"Edit":"Tambah"} Soal</h2>
+        <label>Teks Soal</label><textarea id="qText"></textarea>
+        <label>Peran</label>
+        <select id="qRole">
+            <option value="kepala">Kepala Sekolah</option>
+            <option value="bendahara">Bendahara/Arkas</option>
+            <option value="dapodik">Ops Dapodik</option>
+        </select>
+        <label>Pilihan Jawaban</label>
+        <input id="opt1" placeholder="Pilihan 1">
+        <input id="opt2" placeholder="Pilihan 2">
+        <input id="opt3" placeholder="Pilihan 3">
+        <input id="opt4" placeholder="Pilihan 4">
+        <label>Jawaban Benar (isi nomor 1-4)</label>
+        <input id="correct" type="number" min="1" max="4">
+        <label>Poin Soal</label>
+        <input id="points" type="number" min="1" value="1">
+        <button onclick="saveQuestion()">${editingId?"Update":"Simpan"} Soal</button>
+        <button onclick="cancelEdit()">Batal</button>
+        
+        <hr style="margin: 20px 0;">
+        ${undoButton} 
+
+        <h3>Daftar Soal</h3>
+        <label>Filter Peran</label>
+        <select onchange="renderQuestionInput(this.value)">
+            <option value="">Semua</option>
+            <option value="kepala">Kepala</option>
+            <option value="bendahara">Bendahara</option>
+            <option value="dapodik">Dapodik</option>
+        </select>
+        <table><tr><th>Soal</th><th>Peran</th><th>Benar</th><th>Poin</th><th>Aksi</th></tr>`;
+    qs.forEach(q=>{
+        form+=`<tr><td>${q.text.substring(0, 50)}...</td><td>${q.role}</td><td>${q.correct+1}</td><td>${q.points}</td>
+            <td><button onclick="editQuestion('${q.id}')">Edit</button>
+            <button class="danger" onclick="deleteQuestion('${q.id}')">Hapus</button></td></tr>`;
+    });
+    form+=`</table><button onclick="renderAdminMenu()">Kembali</button>`;
+    document.getElementById("app").innerHTML=form;
+}
+function saveQuestion(){
+    const qs=loadQuestions();
+    const q={ id:editingId||Date.now().toString(),
+        text:document.getElementById("qText").value,
+        role:document.getElementById("qRole").value,
+        options:[document.getElementById("opt1").value,document.getElementById("opt2").value,
+                document.getElementById("opt3").value,document.getElementById("opt4").value],
+        correct:parseInt(document.getElementById("correct").value)-1,
+        points:parseInt(document.getElementById("points").value)||1
+    };
+    if(editingId){ const idx=qs.findIndex(x=>x.id===editingId); qs[idx]=q; editingId=null;}
+    else qs.push(q);
+    saveQuestions(qs); 
+    lastDeletedQuestion = null; 
+    renderQuestionInput();
+}
+function editQuestion(id){ const qs=loadQuestions(); const q=qs.find(x=>x.id===id);
+    editingId=id; renderQuestionInput(q.role);
+    document.getElementById("qText").value=q.text;
+    document.getElementById("qRole").value=q.role;
+    document.getElementById("opt1").value=q.options[0];
+    document.getElementById("opt2").value=q.options[1];
+    document.getElementById("opt3").value=q.options[2];
+    document.getElementById("opt4").value=q.options[3];
+    document.getElementById("correct").value=q.correct+1;
+    document.getElementById("points").value=q.points;
+}
+
+function deleteQuestion(id){ 
+    showConfirm("Apakah Anda yakin ingin menghapus soal ini?", (confirmed) => {
+        if(confirmed){
+            let qs=loadQuestions();
+            const deletedQ = qs.find(q=>q.id===id);
+            lastDeletedQuestion = deletedQ; 
+            qs=qs.filter(q=>q.id!==id); 
+            saveQuestions(qs); 
+            renderQuestionInput();
+        }
+    });
+}
+function cancelEdit(){ editingId=null; renderQuestionInput(); }
+
+function undoDeleteQuestion(){
+    if(!lastDeletedQuestion) return;
+    const qs=loadQuestions();
+    qs.push(lastDeletedQuestion); 
+    saveQuestions(qs);
+    lastDeletedQuestion = null; 
+    renderQuestionInput();
+}
+
+/* ---------- Pengaturan Durasi (Tidak Berubah) ---------- */
+function renderDurationSettings(){
+    const d=loadDurations();
+    document.getElementById("app").innerHTML=`
+        ${getBrandingHtml('small')}
+        <h2>Pengaturan Durasi (menit)</h2>
+        <label>Kepala Sekolah</label><input id="durKepala" type="number" value="${d.kepala}">
+        <label>Bendahara/Arkas</label><input id="durBendahara" type="number" value="${d.bendahara}">
+        <label>Ops Dapodik</label><input id="durDapodik" type="number" value="${d.dapodik}">
+        <button onclick="saveDurationSettings()">Simpan</button>
+        <button onclick="renderAdminMenu()">Kembali</button>
+    `;
+}
+function saveDurationSettings(){
+    const d={kepala:parseInt(document.getElementById("durKepala").value)||5,
+             bendahara:parseInt(document.getElementById("durBendahara").value)||5,
+             dapodik:parseInt(document.getElementById("durDapodik").value)||5};
+    saveDurations(d);
+    showMessage("Durasi berhasil disimpan!");
+    renderAdminMenu();
+}
+
+/* ---------- Rekap Nilai (Tidak Berubah) ---------- */
+
+// Fungsi untuk menghitung ringkasan skor per kelompok dan peran
+function calculateScoreSummary() {
+    const allAnswers = loadAnswers();
+    const allQuestions = loadQuestions();
+    const allAccounts = loadAccounts();
+    const scoreSummary = {}; // Key: username_role
+
+    allAnswers.forEach(a => {
+        const key = a.username + '_' + a.role; 
+        if (!scoreSummary[key]) {
+            scoreSummary[key] = { 
+                username: a.username, 
+                role: a.role, 
+                school: allAccounts[a.username] ? allAccounts[a.username].school : 'N/A',
+                totalQuestions: 0,
+                answered: a.answers.length,
+                correct: 0,
+                score: 0
+            };
+        }
+        
+        const qRole = allQuestions.filter(q => q.role === a.role);
+        scoreSummary[key].totalQuestions = qRole.length;
+
+        let correct = 0, score = 0;
+        
+        a.answers.forEach((optIdx, i) => {
+            if (qRole[i] && optIdx === qRole[i].correct) { 
+                correct++; 
+                score += qRole[i].points; 
+            }
+        });
+
+        scoreSummary[key].correct = correct;
+        scoreSummary[key].score = score;
+    });
+    return scoreSummary;
+}
+
+// Fungsi untuk menghitung total skor gabungan per kelompok
+function calculateCombinedScores(scoreSummary) {
+    const combinedScores = {}; // Key: username
+    Object.values(scoreSummary).forEach(data => {
+        if (!combinedScores[data.username]) {
+            combinedScores[data.username] = {
+                username: data.username,
+                school: data.school,
+                totalScore: 0,
+                rolesDone: 0,
+                scores: {} // Untuk menyimpan detail skor peran
+            };
+        }
+        combinedScores[data.username].totalScore += data.score;
+        combinedScores[data.username].rolesDone += 1;
+        combinedScores[data.username].scores[data.role] = data.score;
+    });
+    return combinedScores;
+}
+
+function renderScores(filterRole='', combinedFilter='') {
+    const scoreSummary = calculateScoreSummary();
+    const combinedScores = calculateCombinedScores(scoreSummary);
+    
+    let html=`
+        ${getBrandingHtml('small')}
+        <h2>Rekap Nilai</h2>
+        
+        <h3>Skor Per Peran</h3>
+        <label>Filter Peran</label>
+        <select onchange="renderScores(this.value, '${combinedFilter}')">
+            <option value="" ${filterRole === '' ? 'selected' : ''}>Semua</option>
+            <option value="kepala" ${filterRole === 'kepala' ? 'selected' : ''}>Kepala</option>
+            <option value="bendahara" ${filterRole === 'bendahara' ? 'selected' : ''}>Bendahara</option>
+            <option value="dapodik" ${filterRole === 'dapodik' ? 'selected' : ''}>Dapodik</option>
+        </select>
+        <table id="scoreTable"><tr>
+        <th>Kelompok</th><th>Sekolah</th><th>Peran</th><th>Soal Total</th><th>Terjawab</th><th>Benar</th><th>Skor</th></tr>`;
+
+    // Tampilkan data Skor Per Peran
+    Object.values(scoreSummary).filter(data => data.role !== 'admin' && (!filterRole || data.role === filterRole)).forEach(data => {
+        html += `<tr>
+            <td>${data.username}</td>
+            <td>${data.school}</td>
+            <td>${data.role}</td>
+            <td>${data.totalQuestions}</td>
+            <td>${data.answered}</td>
+            <td>${data.correct}</td>
+            <td>${data.score}</td>
+        </tr>`;
+    });
+
+    html+=`</table>
+
+        <hr class="section-separator">
+
+        <h3>Rekap Nilai Gabungan (Total)</h3>
+        <div class="score-filter">
+            <label>Filter Total Skor:</label>
+            <select onchange="renderScores('${filterRole}', this.value)">
+                <option value="" ${combinedFilter === '' ? 'selected' : ''}>Tampilkan Semua</option>
+                <option value="highest" ${combinedFilter === 'highest' ? 'selected' : ''}>Skor Tertinggi</option>
+                <option value="lowest" ${combinedFilter === 'lowest' ? 'selected' : ''}>Skor Terendah</option>
+            </select>
+        </div>
+        <table id="combinedScoreTable"><tr>
+        <th>Kelompok</th><th>Sekolah</th><th>Kepala</th><th>Bendahara</th><th>Dapodik</th><th>Total Skor</th></tr>`;
+    
+    let combinedArray = Object.values(combinedScores).filter(data => data.rolesDone > 0); // Hanya tampilkan yang sudah mengerjakan setidaknya 1 peran
+
+    // Filter/Sorting Skor Gabungan
+    if (combinedFilter === 'highest') {
+        combinedArray.sort((a, b) => b.totalScore - a.totalScore);
+        combinedArray = combinedArray.slice(0, 5); // Tampilkan top 5
+    } else if (combinedFilter === 'lowest') {
+        combinedArray.sort((a, b) => a.totalScore - b.totalScore);
+        combinedArray = combinedArray.slice(0, 5); // Tampilkan bottom 5
+    }
+
+    // Tampilkan data Skor Gabungan
+    combinedArray.forEach(data => {
+        html += `<tr>
+            <td>${data.username}</td>
+            <td>${data.school}</td>
+            <td>${data.scores.kepala || 0}</td>
+            <td>${data.scores.bendahara || 0}</td>
+            <td>${data.scores.dapodik || 0}</td>
+            <td><strong>${data.totalScore}</strong></td>
+        </tr>`;
+    });
+
+    html+=`</table>
+        <button onclick="downloadCombinedScoresXLSX()">Download Total Skor Excel (.xlsx)</button>
+        <button onclick="downloadScoresXLSX()">Download Skor Per Peran Excel (.xlsx)</button>
+        <button onclick="renderAdminMenu()">Kembali</button>`;
+    document.getElementById("app").innerHTML=html;
+}
+
+function downloadCombinedScoresXLSX(){
+    const combinedScores = calculateCombinedScores(calculateScoreSummary());
+    const data = [
+        ["Kelompok", "Sekolah", "Skor Kepala", "Skor Bendahara", "Skor Dapodik", "Total Skor", "Peran Selesai"]
+    ];
+
+    Object.values(combinedScores).forEach(dataGroup => {
+        data.push([
+            dataGroup.username,
+            dataGroup.school,
+            dataGroup.scores.kepala || 0,
+            dataGroup.scores.bendahara || 0,
+            dataGroup.scores.dapodik || 0,
+            dataGroup.totalScore,
+            dataGroup.rolesDone
+        ]);
+    });
+    
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Rekap Total Nilai");
+    XLSX.writeFile(wb, "rekap_total_nilai.xlsx");
+}
+
+function downloadScoresXLSX(){
+    // Menggunakan tabel yang sudah ada untuk download Skor Per Peran
+    const scoreSummary = calculateScoreSummary();
+    const data = [
+        ["Kelompok", "Sekolah", "Peran", "Soal Total", "Terjawab", "Benar", "Skor"]
+    ];
+
+    Object.values(scoreSummary).filter(data => data.role !== 'admin').forEach(dataGroup => {
+        data.push([
+            dataGroup.username,
+            dataGroup.school,
+            dataGroup.role,
+            dataGroup.totalQuestions,
+            dataGroup.answered,
+            dataGroup.correct,
+            dataGroup.score
+        ]);
+    });
+    
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Rekap Nilai Per Peran");
+    XLSX.writeFile(wb, "rekap_nilai_per_peran.xlsx");
+}
+
+/* ---------- Peserta (Tidak Berubah) ---------- */
+function renderRoleSelect(){
+    const schoolName = currentUser.school ? currentUser.school : 'N/A';
+
+    document.getElementById("app").innerHTML=`
+        ${getBrandingHtml('small')}
+        <h2>Pilih Peran</h2>
+        <div class="info">
+            Kelompok: <strong>${currentUser.username}</strong><br>
+            Nama Sekolah: <strong>${schoolName}</strong>
+        </div>
+        <select id="roleSel">
+            <option value="kepala">Kepala Sekolah</option>
+            <option value="bendahara">Bendahara/Arkas</option>
+            <option value="dapodik">Ops Dapodik</option>
+        </select>
+        <button onclick="startQuiz()">Mulai Kuis</button>
+        <button class="danger" onclick="logout()">Logout</button>
+    `;
+}
+
+function startQuiz(){
+    const role=document.getElementById("roleSel").value;
+    const qs=loadQuestions().filter(q=>q.role===role);
+    
+    const allAnswers = loadAnswers();
+    const alreadyDone = allAnswers.some(a => a.username === currentUser.username && a.role === role);
+
+    if (alreadyDone) {
+        showMessage(`Anda sudah mengirimkan jawaban untuk peran "${role}". Anda tidak dapat mengerjakan kuis ini lagi.`);
+        return;
+    }
+
+    if(qs.length===0){ 
+        showMessage("Soal untuk peran ini belum tersedia. Silakan hubungi admin.");
+        return;
+    }
+    
+    const dur=loadDurations()[role]*60;
+    let timeLeft=dur;
+    const schoolName = currentUser.school ? currentUser.school : 'N/A';
+
+    const renderQuiz = (time) => {
+        let html=`
+            ${getBrandingHtml('small')}
+            <h2>Kuis (${role})</h2>
+            <div class="info">
+                Sekolah: <strong>${schoolName}</strong> | Kelompok: <strong>${currentUser.username}</strong>
+            </div>
+            <div class="timer" id="timer"></div>
+            <form id="quizForm">
+        `;
+        qs.forEach((q,i)=>{
+            html+=`<p><strong>${i+1}. ${q.text}</strong> <em>(Poin: ${q.points})</em></p>`;
+            q.options.forEach((opt,j)=>{
+                html+=`<label><input type="radio" name="q${i}" value="${j}"> ${opt}</label><br>`;
+            });
+            html+=`<hr style="border: none; border-top: 1px dashed #eee; margin: 15px 0;">`;
+        });
+        
+        html+=`
+            <div class="button-group">
+                <button type="submit">Kirim Jawaban</button>
+                <button type="button" class="danger" onclick="logout()">Logout</button>
+            </div>
+            </form>`;
+        document.getElementById("app").innerHTML=html;
+
+        const currentAnswers = JSON.parse(localStorage.getItem('tempAnswers_' + currentUser.username + '_' + role) || '{}');
+        Object.keys(currentAnswers).forEach(qIndex => {
+            const val = currentAnswers[qIndex];
+            const radio = document.querySelector(`input[name="q${qIndex}"][value="${val}"]`);
+            if (radio) radio.checked = true;
+        });
+
+        document.getElementById("quizForm").addEventListener('change', (e) => {
+            if (e.target.type === 'radio') {
+                const qIndex = e.target.name.substring(1);
+                currentAnswers[qIndex] = e.target.value;
+                localStorage.setItem('tempAnswers_' + currentUser.username + '_' + role, JSON.stringify(currentAnswers));
+            }
+        });
+
+        function updateTimer(){
+            const m=Math.floor(time/60), s=time%60;
+            document.getElementById("timer").textContent=`Sisa waktu: ${m}:${s.toString().padStart(2,"0")}`;
+            if(time<=0){ 
+                clearInterval(quizTimer); 
+                handleQuizSubmit(role, qs, time, true);
+            }
+            time--;
+            timeLeft = time;
+        }
+
+        if (quizTimer) clearInterval(quizTimer); 
+        quizTimer=setInterval(updateTimer,1000); 
+        updateTimer();
+        
+        document.getElementById("quizForm").onsubmit=function(e){ 
+            e.preventDefault(); 
+            clearInterval(quizTimer); 
+            handleQuizSubmit(role, qs, timeLeft, false);
+        }
+    }
+
+    renderQuiz(dur);
+}
+
+function handleQuizSubmit(role, qs, remainingTime, isTimeUp) {
+    if (isTimeUp) {
+        processQuizSubmission(role, qs);
+        showMessage("Waktu habis! Jawaban Anda telah otomatis dikirim.");
+    } else {
+        showConfirm("Yakin kirim jawaban?", (confirmed) => {
+            if (confirmed) {
+                processQuizSubmission(role, qs);
+            } else {
+                const currentDuration = loadDurations()[role] * 60;
+                const timeToResume = currentDuration > remainingTime ? remainingTime : currentDuration;
+                
+                // Panggil renderQuiz lagi untuk melanjutkan timer
+                renderQuiz(timeToResume); 
+            }
+        });
+    }
+}
+
+
+function processQuizSubmission(role, qs){
+    if (quizTimer) clearInterval(quizTimer);
+
+    const answers=[]; 
+    qs.forEach((q,i)=>{
+        const sel=document.querySelector("input[name=q"+i+"]:checked");
+        // Simpan -1 jika tidak dijawab
+        answers.push(sel ? parseInt(sel.value) : -1); 
+    });
+
+    const all=loadAnswers(); 
+    all.push({username:currentUser.username, role:role, answers:answers, timestamp: Date.now()});
+    saveAnswers(all);
+    
+    localStorage.removeItem('tempAnswers_' + currentUser.username + '_' + role);
+
+    document.getElementById("app").innerHTML=`
+        ${getBrandingHtml('small')}
+        <h2>Jawaban tersimpan</h2>
+        <p>Terima kasih sudah mengerjakan kuis peran ${role}.</p>
+        <button class="danger" onclick="logout()">Logout</button>
+    `;
+}
+
+/* ---------- Logout ---------- */
+function logout(){ 
+    if (quizTimer) clearInterval(quizTimer);
+    currentUser=null; 
+    renderLogin(); 
+}
+
+/* ---------- Start ---------- */
+renderLogin();
+</script>
+</body>
+</html>
