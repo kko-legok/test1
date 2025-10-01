@@ -1,0 +1,20 @@
+{
+  "questions": [
+    {
+      "id": "q_1",
+      "text": "Contoh soal untuk kepala sekolah?",
+      "options": ["Pilihan A", "Pilihan B", "Pilihan C", "Pilihan D"],
+      "answer": "A",
+      "role": "kepala"
+    }
+  ],
+  "durations": {
+    "kepala": 10,
+    "bendahara": 10,
+    "dapodik": 10
+  },
+  "branding": {
+    "text": "Nama Institusi Anda",
+    "logoData": null
+  }
+}
