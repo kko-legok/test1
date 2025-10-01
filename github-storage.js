@@ -3,7 +3,7 @@ class GitHubStorage {
     constructor() {
         this.owner = 'kko-legok'; // Ganti dengan username GitHub Anda
         this.repo = 'quiz'; // Ganti dengan nama repository Anda
-        this.token = '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'; // Ganti dengan token GitHub Anda
+        this.token = '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'; // Ganti dengan token GitHub Anda
         this.baseUrl = `https://api.github.com/repos/${this.owner}/${this.repo}/contents`;
         this.branch = 'main';
         
